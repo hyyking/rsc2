@@ -10,21 +10,28 @@ use init::InitGame;
 use launch::Launched;
 use replay::InReplay;
 
-use websocket::sync::Client;
-
-use tokio::net::TcpStream;
-use tokio::reactor::Handle;
-
-pub trait IsProtocolState {
-    fn create_game(&self) {}
-    fn join_game(&self) {}
-    fn start_replay(&self) {}
-    fn restart_game(&self) {}
-    fn close_game(&self) {}
-}
+use tokio::prelude::*;
 
 pub struct SharedState {
-    pub conn: TcpStream,
+    pub conn: tokio::codec::Framed<tokio::net::TcpStream, websocket::r#async::MessageCodec<websocket::OwnedMessage>>
+}
+
+pub trait IsProtocolState {
+    fn create_game(&mut self, shared: &mut SharedState) {
+        error!("Wrong Caller of create_game");
+    }
+    fn join_game(&mut self, _: &mut SharedState) {
+        error!("Wrong Caller of join_game")
+    }
+    fn start_replay(&mut self, _: &mut SharedState) {
+        error!("Wrong Caller of start_replay")
+    }
+    fn restart_game(&mut self, _: &mut SharedState) {
+        error!("Wrong Caller of restart_game")
+    }
+    fn close_game(&mut self, _: &mut SharedState) {
+        error!("Wrong Caller of close_game")
+    }
 }
 
 pub struct ProtocolStateMachine<S>
@@ -43,25 +50,25 @@ where
         debug!("pinged ProtocolStateMachine");
     }
 
-    pub fn create_game(&self) {
+    pub fn create_game(&mut self) {
         debug!("Creating game...");
-        self.inner.create_game()
+        self.inner.create_game(&mut self.shared);
     }
-    pub fn join_game(&self) {
+    pub fn join_game(&mut self) {
         debug!("Joining game...");
-        self.inner.join_game()
+        self.inner.join_game(&mut self.shared);
     }
-    pub fn start_replay(&self) {
+    pub fn start_replay(&mut self) {
         debug!("Starting replay...");
-        self.inner.start_replay()
+        self.inner.start_replay(&mut self.shared);
     }
-    pub fn restart_game(&self) {
+    pub fn restart_game(&mut self) {
         debug!("Restartin game...");
-        self.inner.restart_game()
+        self.inner.restart_game(&mut self.shared);
     }
-    pub fn close_game(&self) {
+    pub fn close_game(&mut self) {
         debug!("Closing game...");
-        self.inner.close_game()
+        self.inner.close_game(&mut self.shared);
     }
 }
 
@@ -85,44 +92,32 @@ pub enum ProtocolState {
     CloseGame,
 }
 
-impl Into<ProtocolState> for Client<std::net::TcpStream> {
-    fn into(self) -> ProtocolState {
-        ProtocolState::Launched(Some(ProtocolStateMachine {
-            shared: SharedState {
-                conn: TcpStream::from_std(self.into_stream().0, &Handle::default())
-                    .expect("couldn't convert std::net::TcpStream to tokio::net::TcpStream"),
-            },
-            inner: Launched::default(),
-        }))
-    }
-}
-
 impl ProtocolState {
     pub fn run(self, arg: ProtocolArg) -> ProtocolState {
         use self::{ProtocolArg::*, ProtocolState::*};
         match (self, arg) {
             (Launched(None), _) => CloseGame,
-            (Launched(Some(sm)), CreateGame) => {
+            (Launched(Some(mut sm)), CreateGame) => {
                 sm.create_game();
                 InitGame(sm.into())
             }
-            (Launched(Some(sm)), StartReplay) => {
+            (Launched(Some(mut sm)), StartReplay) => {
                 sm.start_replay();
                 InReplay(sm.into())
             }
-            (Launched(Some(sm)), JoinGame) => {
+            (Launched(Some(mut sm)), JoinGame) => {
                 sm.join_game();
                 InGame(sm.into())
             }
-            (InitGame(sm), JoinGame) => {
+            (InitGame(mut sm), JoinGame) => {
                 sm.join_game();
                 InGame(sm.into())
             }
-            (Ended(sm), RestartGame) => {
+            (Ended(mut sm), RestartGame) => {
                 sm.restart_game();
                 InGame(sm.into())
             }
-            (Ended(sm), LeaveGame) => {
+            (Ended(mut sm), LeaveGame) => {
                 sm.close_game();
                 Launched(None)
             }
@@ -148,5 +143,19 @@ impl std::fmt::Debug for ProtocolState {
             InReplay(_) => write!(f, "InReplay"),
             Ended(_) => write!(f, "Ended"),
         }
+    }
+}
+
+impl Into<ProtocolState> for websocket::client::r#async::ClientNew<websocket::r#async::TcpStream> {
+    fn into(self) -> ProtocolState {
+        ProtocolState::Launched(Some(ProtocolStateMachine {
+            shared: SharedState {
+                conn: self
+                    .map(|(s, _)| s)
+                    .wait()
+                    .expect(r#"could not connect to the SC2API at "ws://127.0.0.1:5000/sc2api""#),
+            },
+            inner: Launched::default(),
+        }))
     }
 }

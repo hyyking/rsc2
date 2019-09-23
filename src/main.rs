@@ -3,13 +3,16 @@ extern crate log;
 extern crate pretty_env_logger;
 
 extern crate tokio;
+
 extern crate websocket;
+extern crate bytes;
 
 extern crate prost;
 #[macro_use]
 extern crate prost_derive;
 
 mod states;
+mod sc2_api;
 
 use states::{ProtocolArg, ProtocolState};
 
@@ -21,8 +24,8 @@ fn main() -> Result<(), ParseError> {
     debug!("Establishing Connection");
     let established = ClientBuilder::new("ws://127.0.0.1:5000/sc2api")
         .unwrap()
-        .connect_insecure()
-        .expect("could not connect to the SC2API at ws://127.0.0.1:5000/sc2api");
+        .async_connect_insecure();
+//       ;
 
     debug!("Connection Established to ws://127.0.0.1:5000/sc2api");
     let engine: ProtocolState = established.into();

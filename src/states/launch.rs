@@ -1,13 +1,30 @@
-use crate::states::{IsProtocolState, ProtocolStateMachine, InitGame, InGame, InReplay};
+use crate::sc2_api;
+use crate::states::{
+    InGame, InReplay, InitGame, IsProtocolState, ProtocolStateMachine, SharedState,
+};
+
+use bytes::Buf;
+use std::borrow::BorrowMut;
+use std::io::Cursor;
+
+use prost::*;
+use tokio::prelude::*;
 
 pub struct Launched; // Launched info
 
-impl IsProtocolState for Launched {}
-
-impl Launched {
-    fn create_game(&self) {}
-    fn join_game(&self) {}
-    fn start_replay(&self) {}
+impl IsProtocolState for Launched {
+    fn create_game(&mut self, shared: &mut SharedState) {
+        let mut buff = vec![];
+        sc2_api::Request {
+            id: None,
+            request: Some(sc2_api::request::Request::Ping(sc2_api::RequestPing {})),
+        }
+        .encode(&mut buff)
+        .unwrap();
+        shared.conn.send(websocket::OwnedMessage::Binary(buff)).wait();
+    }
+    fn join_game(&mut self, shared: &mut SharedState) {}
+    fn start_replay(&mut self, shared: &mut SharedState) {}
 }
 
 impl Default for Launched {

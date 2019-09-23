@@ -1,12 +1,10 @@
-use crate::states::{IsProtocolState, ProtocolStateMachine, Launched, InGame};
+use crate::states::{IsProtocolState, ProtocolStateMachine, SharedState, Launched, InGame};
 
 pub struct Ended; // Ended info
 
-impl IsProtocolState for Ended {}
-
-impl Ended {
-    fn restart_game(&self) {} 
-    fn close_game(&self) {} 
+impl IsProtocolState for Ended {
+    fn restart_game(&mut self, shared: &mut SharedState) {} 
+    fn close_game(&mut self, shared: &mut SharedState) {} 
 }
 
 /// Once a game has ended we can either replay it, launch another one or end
