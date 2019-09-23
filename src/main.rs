@@ -18,14 +18,15 @@ use websocket::{client::builder::ParseError, ClientBuilder};
 fn main() -> Result<(), ParseError> {
     pretty_env_logger::init_timed();
 
+    debug!("Establishing Connection");
     let established = ClientBuilder::new("ws://127.0.0.1:5000/sc2api")
         .unwrap()
         .connect_insecure()
         .expect("could not connect to the SC2API at ws://127.0.0.1:5000/sc2api");
 
+    debug!("Connection Established to ws://127.0.0.1:5000/sc2api");
     let engine: ProtocolState = established.into();
-    engine.run();
-    // tokio::run(engine);
+    let next_state = engine.run(ProtocolArg::CreateGame);
     Ok(())
 }
 
@@ -56,5 +57,4 @@ use websocket::OwnedMessage;
             x => println!("{:?}", x),
         });
     runtime.block_on(echo_future).unwrap();
-
 */
