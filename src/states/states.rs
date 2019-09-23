@@ -1,36 +1,44 @@
-pub trait ProtocolState {}
+use tokio::net::TcpStream;
+
+pub trait IsProtocolState: Sized {}
+
+pub struct SharedState {
+    pub conn: TcpStream,
+}
 
 pub struct ProtocolStateMachine<S>
 where
-    S: ProtocolState,
+    S: IsProtocolState,
 {
-    // Add shared values here
-    state: S,
+    pub shared: SharedState,
+    pub inner: S,
+}
+
+impl<S> ProtocolStateMachine<S> where S: IsProtocolState {
+    pub fn ping(&self) {
+        trace!("pinged ProtocolStateMachine");
+    }
 }
 
 pub struct Launched; // Launched info
-impl ProtocolState for Launched {}
-
-pub struct InitGame; // InitGame info
-impl ProtocolState for InitGame {}
-
-pub struct InGame; // InGame info
-impl ProtocolState for InGame {}
-
-pub struct InReplay; // InReplay info
-impl ProtocolState for InReplay {}
-
-pub struct Ended; // Ended info
-impl ProtocolState for Ended {}
-
-impl Default for ProtocolStateMachine<Launched> {
+impl IsProtocolState for Launched {}
+impl Default for Launched {
     fn default() -> Self {
-        ProtocolStateMachine {
-            // Share Values
-            state: Launched {},
-        }
+        return Launched{}
     }
 }
+
+pub struct InitGame; // InitGame info
+impl IsProtocolState for InitGame {}
+
+pub struct InGame; // InGame info
+impl IsProtocolState for InGame {}
+
+pub struct InReplay; // InReplay info
+impl IsProtocolState for InReplay {}
+
+pub struct Ended; // Ended info
+impl IsProtocolState for Ended {}
 
 /// Launched State launches a SC2 game instance and can transition in either a GameCreation state
 /// or a Playing/Spectating state
@@ -40,28 +48,29 @@ impl Default for ProtocolStateMachine<Launched> {
 //      Launched -> InReplay
 
 impl From<ProtocolStateMachine<Launched>> for ProtocolStateMachine<InitGame> {
-    fn from(_: ProtocolStateMachine<Launched>) -> ProtocolStateMachine<InitGame> {
+    fn from(prev: ProtocolStateMachine<Launched>) -> Self {
         ProtocolStateMachine {
-            // Shared Values
-            state: InitGame {},
+            shared: prev.shared,
+            inner: InitGame {},
         }
     }
 }
 
 impl From<ProtocolStateMachine<Launched>> for ProtocolStateMachine<InGame> {
-    fn from(_: ProtocolStateMachine<Launched>) -> ProtocolStateMachine<InGame> {
+    fn from(prev: ProtocolStateMachine<Launched>) -> Self {
         ProtocolStateMachine {
-            // Shared Values
-            state: InGame {},
+            shared: prev.shared,
+            inner: InGame {},
         }
     }
 }
 
 impl From<ProtocolStateMachine<Launched>> for ProtocolStateMachine<InReplay> {
-    fn from(_: ProtocolStateMachine<Launched>) -> ProtocolStateMachine<InReplay> {
+    fn from(prev: ProtocolStateMachine<Launched>) -> Self {
         ProtocolStateMachine {
             // Shared Values
-            state: InReplay {},
+            shared: prev.shared,
+            inner: InReplay {},
         }
     }
 }
@@ -70,10 +79,10 @@ impl From<ProtocolStateMachine<Launched>> for ProtocolStateMachine<InReplay> {
 // Transitions:
 //      InitGame -> InGame
 impl From<ProtocolStateMachine<InitGame>> for ProtocolStateMachine<InGame> {
-    fn from(_: ProtocolStateMachine<InitGame>) -> ProtocolStateMachine<InGame> {
+    fn from(prev: ProtocolStateMachine<InitGame>) -> Self {
         ProtocolStateMachine {
-            // Shared Values
-            state: InGame {},
+            shared: prev.shared,
+            inner: InGame {},
         }
     }
 }
@@ -82,10 +91,10 @@ impl From<ProtocolStateMachine<InitGame>> for ProtocolStateMachine<InGame> {
 // Transitions:
 //      InGame -> Ended
 impl From<ProtocolStateMachine<InGame>> for ProtocolStateMachine<Ended> {
-    fn from(_: ProtocolStateMachine<InGame>) -> ProtocolStateMachine<Ended> {
+    fn from(prev: ProtocolStateMachine<InGame>) -> Self {
         ProtocolStateMachine {
-            // Shared Values
-            state: Ended {},
+            shared: prev.shared,
+            inner: Ended {},
         }
     }
 }
@@ -94,10 +103,10 @@ impl From<ProtocolStateMachine<InGame>> for ProtocolStateMachine<Ended> {
 // Transitions
 //      InReplay -> Ended
 impl From<ProtocolStateMachine<InReplay>> for ProtocolStateMachine<Ended> {
-    fn from(_: ProtocolStateMachine<InReplay>) -> ProtocolStateMachine<Ended> {
+    fn from(prev: ProtocolStateMachine<InReplay>) -> Self {
         ProtocolStateMachine {
-            // Shared Values
-            state: Ended {},
+            shared: prev.shared,
+            inner: Ended {},
         }
     }
 }
@@ -107,19 +116,19 @@ impl From<ProtocolStateMachine<InReplay>> for ProtocolStateMachine<Ended> {
 //      Ended -> Launched
 //      Ended -> InGame
 impl From<ProtocolStateMachine<Ended>> for ProtocolStateMachine<Launched> {
-    fn from(_: ProtocolStateMachine<Ended>) -> ProtocolStateMachine<Launched> {
+    fn from(prev: ProtocolStateMachine<Ended>) -> Self {
         ProtocolStateMachine {
-            // Shared Values
-            state: Launched {},
+            shared: prev.shared,
+            inner: Launched {},
         }
     }
 }
 
 impl From<ProtocolStateMachine<Ended>> for ProtocolStateMachine<InGame> {
-    fn from(_: ProtocolStateMachine<Ended>) -> ProtocolStateMachine<InGame> {
+    fn from(prev: ProtocolStateMachine<Ended>) -> Self {
         ProtocolStateMachine {
-            // Shared Values
-            state: InGame {},
+            shared: prev.shared,
+            inner: InGame {},
         }
     }
 }

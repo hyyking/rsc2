@@ -1,25 +1,60 @@
+#[macro_use]
+extern crate log;
+extern crate pretty_env_logger;
+
 extern crate tokio;
+extern crate websocket;
 
-mod state_machine;
+extern crate prost;
+#[macro_use]
+extern crate prost_derive;
 
-use tokio::net::TcpListener;
-use tokio::prelude::*;
+mod states;
 
-use state_machine::*;
+use states::{ProtocolArg, ProtocolState};
 
-fn main() {
-    let sm = ProtocolStateMachine::default();
-    let _nsm = ProtocolStateMachine::<InGame>::from(sm);
+use websocket::{client::builder::ParseError, ClientBuilder};
 
-    let addr = "127.0.0.1:5000".parse().unwrap();
-    let listener = TcpListener::bind(&addr).expect("unable to bind TCP listener");
-    let server = listener
-        .incoming()
-        .and_then(|socket| tokio::io::read_to_end(socket, vec![]))
-        .map_err(|e| eprintln!("{:?}", e))
-        .for_each(|(_, buff)| {
-            println!("{:?}", String::from_utf8(buff));
-            Ok(())
-        });
-    tokio::run(server)
+fn main() -> Result<(), ParseError> {
+    pretty_env_logger::init_timed();
+
+    let established = ClientBuilder::new("ws://127.0.0.1:5000/sc2api")
+        .unwrap()
+        .connect_insecure()
+        .expect("could not connect to the SC2API at ws://127.0.0.1:5000/sc2api");
+
+    let engine: ProtocolState = established.into();
+    engine.run();
+    // tokio::run(engine);
+    Ok(())
 }
+
+/*
+mod sc2_api;
+
+use prost::*;
+use tokio::prelude::*;
+use websocket::OwnedMessage;
+
+    let echo_future = new_connection()?
+        .and_then(|(s, _)| {
+            let mut buff = vec![];
+            sc2_api::Request {
+                id: None,
+                request: Some(sc2_api::request::Request::Ping(sc2_api::RequestPing {})),
+            }
+            .encode(&mut buff)
+            .unwrap();
+
+            s.send(OwnedMessage::Binary(buff).into())
+        })
+        .and_then(|s| s.into_future().map_err(|e| e.0))
+        .map(|(m, _)| match m.unwrap() {
+            OwnedMessage::Binary(buff) => {
+                println!("{:?}", sc2_api::Response::decode(buff).unwrap())
+            }
+            x => println!("{:?}", x),
+        });
+    runtime.block_on(echo_future).unwrap();
+
+*/

@@ -3,6 +3,17 @@ name = "tcpstream"
 version = "0.1.0"
 authors = ["hyyking <leoduret@outlook.com>"]
 edition = "2018"
+# build = "build.rs"
 
 [dependencies]
 tokio = "0.1"
+websocket = "0.23.0"
+bytes = "*"
+prost = "0.5"
+prost-derive = "0.5"
+
+log = {version="0.4.8", features=["max_level_trace", "release_max_level_info"]}
+pretty_env_logger = "0.3.1"
+
+[build-dependencies]
+# prost-build = "0.5"
