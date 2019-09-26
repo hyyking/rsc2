@@ -1,5 +1,5 @@
-use crate::states::{IsProtocolState, ProtocolStateMachine, Ended};
-
+use crate::states::{Ended, IsProtocolState, ProtocolStateMachine};
+#[derive(Debug)]
 pub struct InReplay; // InReplay info
 impl IsProtocolState for InReplay {}
 

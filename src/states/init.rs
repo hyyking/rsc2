@@ -1,9 +1,10 @@
-use crate::states::{IsProtocolState, ProtocolStateMachine, SharedState, InGame};
+use crate::states::{InGame, IsProtocolState, ProtocolStateMachine};
 
+#[derive(Debug)]
 pub struct InitGame; // InitGame info
 
 impl IsProtocolState for InitGame {
-    fn join_game(&mut self, shared: &mut SharedState) {}
+    fn join_game_request(&self) {}
 }
 
 /// InitGame will transition in InGame

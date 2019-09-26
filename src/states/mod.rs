@@ -1,36 +1,94 @@
-mod ended;
-mod ingame;
-mod init;
-mod launch;
-mod replay;
-
-use ended::Ended;
-use ingame::InGame;
-use init::InitGame;
-use launch::Launched;
-use replay::InReplay;
-
+use prost::Message;
 use tokio::prelude::*;
+use tokio::{codec::Framed, net::TcpStream};
+use websocket::{r#async::MessageCodec, OwnedMessage};
+
+use crate::sc2_api;
+
+mod ended;
+use self::ended::Ended;
+
+mod error;
+use self::error::HandleEncodeError;
+
+mod ingame;
+use self::ingame::InGame;
+
+mod init;
+use self::init::InitGame;
+
+mod launch;
+use self::launch::Launched;
+
+mod replay;
+use self::replay::InReplay;
 
 pub struct SharedState {
-    pub conn: tokio::codec::Framed<tokio::net::TcpStream, websocket::r#async::MessageCodec<websocket::OwnedMessage>>
+    pub conn: Framed<TcpStream, MessageCodec<OwnedMessage>>,
 }
 
-pub trait IsProtocolState {
-    fn create_game(&mut self, shared: &mut SharedState) {
-        error!("Wrong Caller of create_game");
+impl SharedState {
+    pub fn create_game(self, message: OwnedMessage) -> Self {
+        debug!("Creating game...");
+        let conn = self
+            .conn
+            .send(message)
+            .wait()
+            .expect("Couldn't send 'create_game' query");
+        let conn = conn.into_future().map_err(|_| {}).map(|(m, s)| {
+            match m.unwrap() {
+                OwnedMessage::Binary(data) => {
+                    println!("{:?}", sc2_api::Response::decode(data).unwrap())
+                }
+                x => println!("{:?}", x),
+            };
+            return s;
+        });
+        Self {
+            conn: conn
+                .wait()
+                .expect("couldn't await the 'create_game' response"),
+            ..self
+        }
     }
-    fn join_game(&mut self, _: &mut SharedState) {
-        error!("Wrong Caller of join_game")
+    pub fn join_game(self) -> Self {
+        debug!("Joining game...");
+        Self { ..self }
     }
-    fn start_replay(&mut self, _: &mut SharedState) {
-        error!("Wrong Caller of start_replay")
+    pub fn start_replay(self) -> Self {
+        debug!("Starting replay...");
+        Self { ..self }
     }
-    fn restart_game(&mut self, _: &mut SharedState) {
-        error!("Wrong Caller of restart_game")
+    pub fn restart_game(self) -> Self {
+        debug!("Restartin game...");
+        Self { ..self }
     }
-    fn close_game(&mut self, _: &mut SharedState) {
-        error!("Wrong Caller of close_game")
+    pub fn close_game(self) -> Self {
+        debug!("Closing game...");
+        Self { ..self }
+    }
+}
+
+pub trait IsProtocolState: std::fmt::Debug {
+    fn create_game_request(&self) -> Result<OwnedMessage, prost::EncodeError> {
+        error!("{:?}: cannot create 'create_game' request", self);
+        panic!("Invalid Operation");
+    }
+    fn join_game_request(&self) {
+        error!("{:?}: cannot create 'join_game' request", self);
+        panic!("Invalid Operation");
+    }
+    fn start_replay_request(&self) {
+        error!("{:?}: cannot create 'join_game' request", self);
+        panic!("Invalid Operation");
+    }
+    fn restart_game_request(&self) {
+        error!("{:?}: cannot create 'restart_game' request", self);
+        panic!("Invalid Operation");
+    }
+    fn close_game_request(&self) {
+        error!("{:?}: cannot create 'close_game' request", self);
+        panic!("Invalid Operation");
     }
 }
 
@@ -48,27 +106,6 @@ where
 {
     pub fn ping(&self) {
         debug!("pinged ProtocolStateMachine");
-    }
-
-    pub fn create_game(&mut self) {
-        debug!("Creating game...");
-        self.inner.create_game(&mut self.shared);
-    }
-    pub fn join_game(&mut self) {
-        debug!("Joining game...");
-        self.inner.join_game(&mut self.shared);
-    }
-    pub fn start_replay(&mut self) {
-        debug!("Starting replay...");
-        self.inner.start_replay(&mut self.shared);
-    }
-    pub fn restart_game(&mut self) {
-        debug!("Restartin game...");
-        self.inner.restart_game(&mut self.shared);
-    }
-    pub fn close_game(&mut self) {
-        debug!("Closing game...");
-        self.inner.close_game(&mut self.shared);
     }
 }
 
@@ -98,27 +135,28 @@ impl ProtocolState {
         match (self, arg) {
             (Launched(None), _) => CloseGame,
             (Launched(Some(mut sm)), CreateGame) => {
-                sm.create_game();
+                let req = sm.inner.create_game_request();
+                sm.shared = sm.shared.create_game(req.unwrap_or_quit());
                 InitGame(sm.into())
             }
-            (Launched(Some(mut sm)), StartReplay) => {
-                sm.start_replay();
+            (Launched(Some(sm)), StartReplay) => {
+                // sm.start_replay();
                 InReplay(sm.into())
             }
-            (Launched(Some(mut sm)), JoinGame) => {
-                sm.join_game();
+            (Launched(Some(sm)), JoinGame) => {
+                // sm.join_game();
                 InGame(sm.into())
             }
-            (InitGame(mut sm), JoinGame) => {
-                sm.join_game();
+            (InitGame(sm), JoinGame) => {
+                // sm.join_game();
                 InGame(sm.into())
             }
-            (Ended(mut sm), RestartGame) => {
-                sm.restart_game();
+            (Ended(sm), RestartGame) => {
+                // sm.restart_game();
                 InGame(sm.into())
             }
-            (Ended(mut sm), LeaveGame) => {
-                sm.close_game();
+            (Ended(_sm), LeaveGame) => {
+                // sm.close_game();
                 Launched(None)
             }
             (x, y) => {
