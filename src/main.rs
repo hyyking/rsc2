@@ -8,7 +8,6 @@ extern crate bytes;
 extern crate websocket;
 
 extern crate prost;
-extern crate prost_derive;
 
 mod proto;
 mod states;

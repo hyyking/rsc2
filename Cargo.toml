@@ -12,7 +12,6 @@ tokio = "0.1.22"
 websocket = "0.23.0"
 bytes = "*"
 prost = {git = "https://github.com/hyyking/prost.git"}
-prost-derive = {git = "https://github.com/hyyking/prost.git"}
 
 log = {version="0.4.8", features=["max_level_debug", "release_max_level_info"]}
 pretty_env_logger = "0.3.1"
