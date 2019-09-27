@@ -1,4 +1,3 @@
-use prost::Message;
 use tokio::prelude::*;
 use tokio::{codec::Framed, net::TcpStream};
 use websocket::{r#async::MessageCodec, OwnedMessage};
@@ -22,35 +21,48 @@ use self::replay::InReplay;
 
 pub struct SharedState {
     pub conn: Framed<TcpStream, MessageCodec<OwnedMessage>>,
+    pub last_response: Option<OwnedMessage>,
 }
 
 impl SharedState {
+    /// Synchronous messages because next state depends on this
     pub fn create_game(self, message: OwnedMessage) -> Self {
-        debug!("Creating game...");
+        info!("Creating game...");
         let conn = self
             .conn
             .send(message)
             .wait()
             .expect("Couldn't send 'create_game' query");
-        let conn = conn.into_future().map_err(|_| {}).map(|(m, s)| {
-            match m.unwrap() {
-                OwnedMessage::Binary(data) => {
-                    println!("{:?}", sc2_api::Response::decode(data).unwrap())
-                }
-                x => println!("{:?}", x),
-            };
-            return s;
-        });
+        let (response, stream) = conn
+            .into_future()
+            .map_err(|err| error!("{:?}", err.0))
+            .wait()
+            .expect("Couldn't wait for 'create_game' response");
+        debug!("{:?}", &response);
         Self {
-            conn: conn
-                .wait()
-                .expect("couldn't await the 'create_game' response"),
+            conn: stream,
+            last_response: Some(response.unwrap()),
             ..self
         }
     }
-    pub fn join_game(self) -> Self {
-        debug!("Joining game...");
-        Self { ..self }
+    pub fn join_game(self, message: OwnedMessage) -> Self {
+        info!("Joining game...");
+        let conn = self
+            .conn
+            .send(message)
+            .wait()
+            .expect("Couldn't send 'join_game' query");
+        let (response, stream) = conn
+            .into_future()
+            .map_err(|err| error!("{:?}", err.0))
+            .wait()
+            .expect("Couldn't wait for 'join_game' response");
+        debug!("{:?}", &response);
+        Self {
+            conn: stream,
+            last_response: Some(response.unwrap()),
+            ..self
+        }
     }
     pub fn start_replay(self) -> Self {
         debug!("Starting replay...");
@@ -71,7 +83,7 @@ pub trait IsProtocolState: std::fmt::Debug {
         error!("{:?}: cannot create 'create_game' request", self);
         panic!("Invalid Operation");
     }
-    fn join_game_request(&self) {
+    fn join_game_request(&self) -> EncodeResult {
         error!("{:?}: cannot create 'join_game' request", self);
         panic!("Invalid Operation");
     }
@@ -132,7 +144,7 @@ impl ProtocolState {
         match (self, arg) {
             (Launched(None), _) => CloseGame,
             (Launched(Some(mut sm)), CreateGame) => {
-                let req = sm.inner.create_game_request();
+                let req = sm.inner.create_game_request(/* add context */);
                 sm.shared = sm.shared.create_game(req.unwrap());
                 InitGame(sm.into())
             }
@@ -140,12 +152,14 @@ impl ProtocolState {
                 // sm.start_replay();
                 InReplay(sm.into())
             }
-            (Launched(Some(sm)), JoinGame) => {
-                // sm.join_game();
+            (Launched(Some(mut sm)), JoinGame) => {
+                let req = sm.inner.join_game_request(/* add context */);
+                sm.shared = sm.shared.join_game(req.unwrap_or_quit());
                 InGame(sm.into())
             }
-            (InitGame(sm), JoinGame) => {
-                // sm.join_game();
+            (InitGame(mut sm), JoinGame) => {
+                let req = sm.inner.join_game_request(/* add context */);
+                sm.shared = sm.shared.join_game(req.unwrap_or_quit());
                 InGame(sm.into())
             }
             (Ended(sm), RestartGame) => {
@@ -189,6 +203,7 @@ impl Into<ProtocolState> for websocket::client::r#async::ClientNew<websocket::r#
                     .map(|(s, _)| s)
                     .wait()
                     .expect(r#"could not connect to the SC2API at "ws://127.0.0.1:5000/sc2api""#),
+                last_response: None,
             },
             inner: Launched::default(),
         }))

@@ -8,7 +8,9 @@ impl IsProtocolState for Launched {
     fn create_game_request(&self) -> EncodeResult {
         sc2_api::Request::with_id(sc2_api::RequestCreateGame::default_config(), 0).into()
     }
-    fn join_game_request(&self) {}
+    fn join_game_request(&self) -> EncodeResult {
+        sc2_api::Request::with_id(sc2_api::RequestJoinGame::default_config(), 1).into()
+    }
     fn start_replay_request(&self) {}
 }
 
@@ -46,7 +48,6 @@ impl From<ProtocolStateMachine<Launched>> for ProtocolStateMachine<InGame> {
 impl From<ProtocolStateMachine<Launched>> for ProtocolStateMachine<InReplay> {
     fn from(prev: ProtocolStateMachine<Launched>) -> Self {
         ProtocolStateMachine {
-            // Shared Values
             shared: prev.shared,
             inner: InReplay {},
         }

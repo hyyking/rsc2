@@ -64,13 +64,6 @@ impl sc2_api::PlayerSetup {
             ..Default::default()                                   // The rest to None
         }
     }
-    /// Add a default player with race
-    pub fn player_with_race(race: sc2_api::Race) -> Self {
-        Self {
-            race: Some(race as i32),
-            ..Self::player() // The rest to player()
-        }
-    }
 
     // BOT ---------------
 
@@ -93,4 +86,72 @@ impl sc2_api::PlayerSetup {
             sc2_api::AiBuild::RandomBuild,
         )
     }
+}
+
+impl sc2_api::InterfaceOptions {
+    pub fn raw_mode() -> Self {
+        Self {
+            raw: Some(true),
+            score: Some(true),
+            feature_layer: None,
+            render: None,
+
+            /// By default cloaked units are completely hidden. This shows some details.
+            show_cloaked: Some(false),
+
+            /// By default burrowed units are completely hidden. This shows some details for those that produce a shadow.
+            show_burrowed_shadows: Some(false),
+
+            /// Return placeholder units (buildings to be constructed), both for raw and feature layers.
+            show_placeholders: Some(true),
+
+            /// By default raw actions select, act and revert the selection. This is useful
+            /// if you're playing simultaneously with the agent so it doesn't steal your
+            /// selection. This inflates APM (due to deselect) and makes the actions hard
+            /// to follow in a replay. Setting this to true will cause raw actions to do
+            /// select, act, but not revert the selection.
+            raw_affects_selection: Some(true),
+
+            /// Changes the coordinates in raw.proto to be relative to the playable area.
+            /// The map_size and playable_area will be the diagonal of the real playable area.
+            raw_crop_to_playable_area: Some(false),
+        }
+    }
+    /* fn feature_layer() -> Self {
+        Self {
+            raw: Some(true),
+            score: Some(true),
+            feature_layer: Some(sc2_api::SpatialCameraSetup {
+                resolution: Some(sc2_api::Size2Di {
+                    x: Some(0),
+                    y: Some(0),
+                }),
+                minimap_resolution: Some(sc2_api::Size2Di {
+                    x: Some(0),
+                    y: Some(0),
+                }),
+                width: Some(100_f32),
+                crop_to_playable_area: Some(true),
+                allow_cheating_layers: Some(true),
+            }),
+            render: Some(sc2_api::SpatialCameraSetup {
+                resolution: Some(sc2_api::Size2Di {
+                    x: Some(0),
+                    y: Some(0),
+                }),
+                minimap_resolution: Some(sc2_api::Size2Di {
+                    x: Some(0),
+                    y: Some(0),
+                }),
+                width: Some(100_f32),
+                crop_to_playable_area: Some(true),
+                allow_cheating_layers: Some(true),
+            }),
+            show_cloaked: Some(false),
+            show_burrowed_shadows: Some(false),
+            show_placeholders: Some(false),
+            raw_affects_selection: Some(true),
+            raw_crop_to_playable_area: Some(true),
+        }
+    } */
 }
