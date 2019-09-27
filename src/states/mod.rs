@@ -3,13 +3,10 @@ use tokio::prelude::*;
 use tokio::{codec::Framed, net::TcpStream};
 use websocket::{r#async::MessageCodec, OwnedMessage};
 
-use crate::sc2_api;
+use crate::proto::{prelude::*, sc2_api};
 
 mod ended;
 use self::ended::Ended;
-
-mod error;
-use self::error::HandleEncodeError;
 
 mod ingame;
 use self::ingame::InGame;
@@ -70,7 +67,7 @@ impl SharedState {
 }
 
 pub trait IsProtocolState: std::fmt::Debug {
-    fn create_game_request(&self) -> Result<OwnedMessage, prost::EncodeError> {
+    fn create_game_request(&self) -> EncodeResult {
         error!("{:?}: cannot create 'create_game' request", self);
         panic!("Invalid Operation");
     }
@@ -136,7 +133,7 @@ impl ProtocolState {
             (Launched(None), _) => CloseGame,
             (Launched(Some(mut sm)), CreateGame) => {
                 let req = sm.inner.create_game_request();
-                sm.shared = sm.shared.create_game(req.unwrap_or_quit());
+                sm.shared = sm.shared.create_game(req.unwrap());
                 InitGame(sm.into())
             }
             (Launched(Some(sm)), StartReplay) => {

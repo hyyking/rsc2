@@ -1,20 +1,12 @@
-use crate::sc2_api;
+use crate::proto::{prelude::*, sc2_api};
 use crate::states::{InGame, InReplay, InitGame, IsProtocolState, ProtocolStateMachine};
-
-use prost::{EncodeError, Message};
 
 #[derive(Debug)]
 pub struct Launched; // Launched info
 
 impl IsProtocolState for Launched {
-    fn create_game_request(&self) -> Result<websocket::OwnedMessage, EncodeError> {
-        let mut buff = vec![];
-        sc2_api::Request {
-            id: None,
-            request: Some(sc2_api::request::Request::Ping(sc2_api::RequestPing {})),
-        }
-        .encode(&mut buff)?;
-        Ok(websocket::OwnedMessage::Binary(buff))
+    fn create_game_request(&self) -> EncodeResult {
+        sc2_api::Request::with_id(sc2_api::RequestCreateGame::default_config(), 0).into()
     }
     fn join_game_request(&self) {}
     fn start_replay_request(&self) {}

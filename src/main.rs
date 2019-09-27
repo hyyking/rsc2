@@ -10,7 +10,7 @@ extern crate websocket;
 extern crate prost;
 extern crate prost_derive;
 
-mod sc2_api;
+mod proto;
 mod states;
 
 use states::{ProtocolArg, ProtocolState};
@@ -21,11 +21,12 @@ fn main() -> Result<(), ParseError> {
     pretty_env_logger::init_timed();
 
     debug!("Establishing Connection");
-    let established = ClientBuilder::new("ws://127.0.0.1:5000/sc2api")?.async_connect_insecure();
+    let connection = ClientBuilder::new("ws://127.0.0.1:5000/sc2api")?.async_connect_insecure();
+    let engine: ProtocolState = connection.into();
 
     debug!("Connection Established to ws://127.0.0.1:5000/sc2api");
-    let engine: ProtocolState = established.into();
     let next_state = engine.run(ProtocolArg::CreateGame);
+
     Ok(())
 }
 
