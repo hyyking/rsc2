@@ -9,14 +9,17 @@ impl DefaultConfig for Vec<sc2_api::PlayerSetup> {
         /// Terran vs Terran Ai
         vec![
             sc2_api::PlayerSetup::player(),
-            sc2_api::PlayerSetup::default_bot_with_race(sc2_api::Race::Terran),
+            sc2_api::PlayerSetup::custom_bot(
+                sc2_api::Race::Terran,
+                sc2_api::Difficulty::Easy,
+                sc2_api::AiBuild::RandomBuild,
+            ),
         ]
     }
 }
 
 impl DefaultConfig for sc2_api::request_create_game::Map {
     fn default_config() -> Self {
-        // let sc2_path = std::env::var("SC2_PATH").unwrap_or("./StarCraftII".into());
         sc2_api::LocalMap {
             map_path: Some("Ladder2017Season1/AbyssalReefLE.SC2Map".into()),
             map_data: None,
@@ -28,7 +31,7 @@ impl DefaultConfig for sc2_api::request_create_game::Map {
 impl DefaultConfig for sc2_api::RequestCreateGame {
     fn default_config() -> Self {
         Self {
-            /// Single Bot Player
+            /// Player vs Bot
             player_setup: Vec::default_config(),
             /// Fog is Enabled by Default
             disable_fog: Some(false),

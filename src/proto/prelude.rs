@@ -2,6 +2,8 @@ use crate::proto::sc2_api;
 
 pub use crate::proto::default::*;
 pub use crate::proto::result::*;
+pub use crate::proto::wrap::*;
+
 pub use prost::Message;
 
 /* pub enum Request {
@@ -41,59 +43,54 @@ impl sc2_api::Request {
     }
 }
 
+#[allow(dead_code)]
 impl sc2_api::PlayerSetup {
+    // OBSERVER ---------------
+
+    /// Add a default observer
+    pub fn observer() -> Self {
+        Self {
+            r#type: Some(sc2_api::PlayerType::Observer as i32), // Observer
+            ..Default::default()
+        }
+    }
+
+    // HUMAN/SCRIPTED ---------------
+
+    /// Add a default player
     pub fn player() -> Self {
         Self {
             r#type: Some(sc2_api::PlayerType::Participant as i32), // Player
             ..Default::default()                                   // The rest to None
         }
     }
-
-    #[allow(dead_code)]
-    pub fn bot() -> Self {
-        Self {
-            r#type: Some(sc2_api::PlayerType::Participant as i32), // Player
-            race: Some(sc2_api::Race::Random as i32),
-            difficulty: Some(sc2_api::Difficulty::Easy as i32),
-            player_name: Some("SpectreVert".into()),
-            ai_build: Some(sc2_api::AiBuild::RandomBuild as i32),
-        }
-    }
-
-    #[allow(dead_code)]
+    /// Add a default player with race
     pub fn player_with_race(race: sc2_api::Race) -> Self {
         Self {
-            r#type: Some(sc2_api::PlayerType::Participant as i32), // Player
             race: Some(race as i32),
-            ..Default::default() // The rest to None
+            ..Self::player() // The rest to player()
         }
     }
 
-    pub fn default_bot_with_race(race: sc2_api::Race) -> Self {
+    // BOT ---------------
+
+    /// Add a custom bot to the Vec<PlayerSetup>
+    pub fn custom_bot(r: sc2_api::Race, d: sc2_api::Difficulty, b: sc2_api::AiBuild) -> Self {
         Self {
-            r#type: Some(sc2_api::PlayerType::Computer as i32), // Player
-            race: Some(race as i32),
-            difficulty: Some(sc2_api::Difficulty::Easy as i32),
-            player_name: Some("SpectreVert".into()),
-            ai_build: Some(sc2_api::AiBuild::RandomBuild as i32),
+            r#type: Some(sc2_api::PlayerType::Computer as i32), // Bot
+            race: Some(r as i32),
+            difficulty: Some(d as i32),              //Easy
+            player_name: Some("SpectreVert".into()), // NOTE: find a better name
+            ai_build: Some(b as i32),                // RandomBuild?
         }
     }
-}
 
-impl Into<sc2_api::request::Request> for sc2_api::RequestPing {
-    fn into(self) -> sc2_api::request::Request {
-        sc2_api::request::Request::Ping(self)
-    }
-}
-
-impl Into<sc2_api::request::Request> for sc2_api::RequestCreateGame {
-    fn into(self) -> sc2_api::request::Request {
-        sc2_api::request::Request::CreateGame(self)
-    }
-}
-
-impl Into<sc2_api::request_create_game::Map> for sc2_api::LocalMap {
-    fn into(self) -> sc2_api::request_create_game::Map {
-        sc2_api::request_create_game::Map::LocalMap(self)
+    /// Add a randomized bot to the Vec<PlayerSetup>
+    pub fn random_bot() -> Self {
+        Self::custom_bot(
+            sc2_api::Race::Random,
+            sc2_api::Difficulty::Easy,
+            sc2_api::AiBuild::RandomBuild,
+        )
     }
 }

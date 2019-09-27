@@ -2,7 +2,7 @@ use crate::proto::sc2_api;
 use prost::{EncodeError, Message};
 use websocket::OwnedMessage;
 
-/// Result<> type for prost encoding
+/// Result<OwnedMessage, EncodeError> type for prost encoding
 #[derive(Debug)]
 pub enum EncodeResult {
     EncodeSuccess(OwnedMessage),
