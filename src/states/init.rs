@@ -1,5 +1,6 @@
-use crate::proto::{prelude::*, sc2_api};
 use crate::states::{InGame, IsProtocolState, ProtocolStateMachine};
+
+use rsc2_pb::{prelude::*, sc2_api};
 
 #[derive(Debug)]
 pub struct InitGame; // InitGame info

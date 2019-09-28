@@ -2,7 +2,7 @@ use tokio::prelude::*;
 use tokio::{codec::Framed, net::TcpStream};
 use websocket::{r#async::MessageCodec, OwnedMessage};
 
-use crate::proto::{prelude::*, sc2_api};
+use rsc2_pb::{prelude::*, sc2_api};
 
 mod ended;
 use self::ended::Ended;

@@ -1,4 +1,4 @@
-use crate::proto::sc2_api;
+use crate::sc2_api;
 
 pub trait DefaultConfig {
     fn default_config() -> Self;
@@ -20,11 +20,10 @@ impl DefaultConfig for Vec<sc2_api::PlayerSetup> {
 
 impl DefaultConfig for sc2_api::request_create_game::Map {
     fn default_config() -> Self {
-        sc2_api::LocalMap {
+        sc2_api::request_create_game::Map::LocalMap(sc2_api::LocalMap {
             map_path: Some("Ladder2017Season1/AbyssalReefLE.SC2Map".into()),
             map_data: None,
-        }
-        .into()
+        })
     }
 }
 

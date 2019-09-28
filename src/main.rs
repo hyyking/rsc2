@@ -2,14 +2,13 @@
 extern crate log;
 extern crate pretty_env_logger;
 
-extern crate tokio;
-
 extern crate bytes;
+extern crate prost;
+extern crate tokio;
 extern crate websocket;
 
-extern crate prost;
+extern crate rsc2_pb;
 
-mod proto;
 mod states;
 
 use states::{ProtocolArg, ProtocolState};

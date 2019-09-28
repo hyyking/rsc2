@@ -1,8 +1,7 @@
-use crate::proto::sc2_api;
+use crate::sc2_api;
 
-pub use crate::proto::default::*;
-pub use crate::proto::result::*;
-pub use crate::proto::wrap::*;
+pub use crate::default::*;
+pub use crate::result::*;
 
 pub use prost::Message;
 
