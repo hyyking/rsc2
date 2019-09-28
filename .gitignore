@@ -3,5 +3,3 @@
 Cargo.lock
 **/*.rs.bk
 StarCraftII
-sc2
-s2client-proto
