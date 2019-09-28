@@ -6,7 +6,7 @@ edition = "2018"
 
 # TODO: change prost-derive this online crate
 [workspace]
-members = ["rsc2-pb"]
+members = ["rsc2-pb","rsc2-derive"]
 
 [features]
 default = ["logging"]
@@ -15,10 +15,9 @@ logging = ["log", "pretty_env_logger"]
 [dependencies]
 # Core
 rsc2_pb = {path="rsc2-pb"}
-
-tokio = "0.1.22"
-websocket = "0.23.0"
-bytes = "^0.4.12"
+websocket = {version= "0.23.0", features=["async"]}
+tokio = "0.1"
+bytes = "0.4"
 prost = {git = "https://github.com/hyyking/prost.git"}
 
 # Logging

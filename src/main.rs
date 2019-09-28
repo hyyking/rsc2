@@ -1,7 +1,11 @@
+extern crate log;
 extern crate pretty_env_logger;
 
-use crate::states::{ProtocolArg, ProtocolState};
-use crate::websocket::{client::builder::ParseError, ClientBuilder};
+extern crate rsc2;
+
+use log::debug;
+use rsc2::states::{ProtocolArg, ProtocolState};
+use rsc2::websocket::{client::builder::ParseError, ClientBuilder};
 
 #[allow(unused_variables)]
 fn main() -> Result<(), ParseError> {

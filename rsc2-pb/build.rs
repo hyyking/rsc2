@@ -5,7 +5,8 @@ fn main() {
     prost_build.btree_map(&["."]);
 
     // SC2 impl Into<request::Request> for Request.request types
-    // prost_build.type_attribute("Request.request", "#[derive(TEST)]");
+    prost_build.type_attribute("", "use rsc2_derive::WrapEnum;");
+    prost_build.type_attribute("Request.request", "#[derive(rsc2_derive::WrapEnum)]");
 
     prost_build
         .compile_protos(
