@@ -19,8 +19,27 @@ use self::launch::Launched;
 mod replay;
 use self::replay::InReplay;
 
+type FramedStream = Framed<TcpStream, MessageCodec<OwnedMessage>>;
+
+fn send_and_receive_sync(
+    conn: FramedStream,
+    message: OwnedMessage,
+) -> (Option<OwnedMessage>, FramedStream) {
+    conn.send(message)
+        .map_err(|err| error!("{:?}", err))
+        .map(|stream| {
+            stream
+                .into_future()
+                .map_err(|err| error!("{:?}", err.0))
+                .wait() // wait for the reponse
+                .expect("Couldn't resolve response")
+        })
+        .wait()
+        .expect("Error sending sync message")
+}
+
 pub struct SharedState {
-    pub conn: Framed<TcpStream, MessageCodec<OwnedMessage>>,
+    pub conn: FramedStream,
     pub last_response: Option<OwnedMessage>,
 }
 
@@ -28,39 +47,23 @@ impl SharedState {
     /// Synchronous messages because next state depends on this
     pub fn create_game(self, message: OwnedMessage) -> Self {
         info!("Creating game...");
-        let conn = self
-            .conn
-            .send(message)
-            .wait()
-            .expect("Couldn't send 'create_game' query");
-        let (response, stream) = conn
-            .into_future()
-            .map_err(|err| error!("{:?}", err.0))
-            .wait()
-            .expect("Couldn't wait for 'create_game' response");
+        let (response, stream): (Option<OwnedMessage>, FramedStream) =
+            send_and_receive_sync(self.conn, message);
         debug!("{:?}", &response);
         Self {
             conn: stream,
-            last_response: Some(response.unwrap()),
+            last_response: response,
             ..self
         }
     }
     pub fn join_game(self, message: OwnedMessage) -> Self {
         info!("Joining game...");
-        let conn = self
-            .conn
-            .send(message)
-            .wait()
-            .expect("Couldn't send 'join_game' query");
-        let (response, stream) = conn
-            .into_future()
-            .map_err(|err| error!("{:?}", err.0))
-            .wait()
-            .expect("Couldn't wait for 'join_game' response");
+        let (response, stream): (Option<OwnedMessage>, FramedStream) =
+            send_and_receive_sync(self.conn, message);
         debug!("{:?}", &response);
         Self {
             conn: stream,
-            last_response: Some(response.unwrap()),
+            last_response: response,
             ..self
         }
     }
