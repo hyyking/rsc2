@@ -30,6 +30,15 @@ pub use prost::Message;
     Debug(RequestDebug),
 } */
 
+impl sc2_api::RequestObservation {
+    pub fn nofog(game_loop: u32) -> Self {
+        Self {
+            disable_fog: Some(false),
+            game_loop: Some(game_loop),
+        }
+    }
+}
+
 impl sc2_api::Request {
     pub fn with_id<M>(req: M, id: u32) -> Self
     where
