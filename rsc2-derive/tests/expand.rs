@@ -15,6 +15,7 @@ pub mod wrapper {
     }
 }
 
+/*
 #[derive(WrapEnum)]
 struct ShouldFail;
 
@@ -22,3 +23,4 @@ struct ShouldFail;
 enum ShouldFailEnumOne {
     First(),
 }
+*/
