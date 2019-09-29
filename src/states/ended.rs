@@ -1,6 +1,6 @@
 use crate::states::{InGame, IsProtocolState, Launched, ProtocolStateMachine};
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Ended; // Ended info
 
 impl IsProtocolState for Ended {

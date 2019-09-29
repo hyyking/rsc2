@@ -21,5 +21,5 @@ bytes = "0.4"
 prost = {git = "https://github.com/hyyking/prost.git"}
 
 # Logging
-log = {version="0.4.8", features=["max_level_debug", "release_max_level_info"], optional=true}
+log = {version="0.4.8", features=["max_level_trace", "release_max_level_info"], optional=true}
 pretty_env_logger = {version="0.3.1", optional=true}

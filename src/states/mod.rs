@@ -67,6 +67,15 @@ impl SharedState {
             ..self
         }
     }
+    pub fn request_gamestate(self, message: OwnedMessage) -> Self {
+        let (response, stream): (Option<OwnedMessage>, FramedStream) =
+            send_and_receive_sync(self.conn, message);
+        Self {
+            conn: stream,
+            last_response: response,
+            ..self
+        }
+    }
     pub fn start_replay(self) -> Self {
         debug!("Starting replay...");
         Self { ..self }
@@ -91,7 +100,11 @@ pub trait IsProtocolState: std::fmt::Debug {
         panic!("Invalid Operation");
     }
     fn start_replay_request(&self) {
-        error!("{:?}: cannot create 'join_game' request", self);
+        error!("{:?}: cannot create 'start_replay_request' request", self);
+        panic!("Invalid Operation");
+    }
+    fn gamestate_request(&self, _: u32) -> EncodeResult {
+        error!("{:?}: cannot create 'gamestate_request' request", self);
         panic!("Invalid Operation");
     }
     fn restart_game_request(&self) {
@@ -123,13 +136,21 @@ where
 
 #[derive(Debug)]
 #[repr(u8)]
+pub enum GameSpeed {
+    RealTime = 0,
+    Faster = 1,
+    Step = 2,
+}
+
+#[derive(Debug)]
+#[repr(u8)]
 pub enum ProtocolArg {
     CreateGame = 0,
-    StartReplay,
-    JoinGame,
-    Step,
-    RestartGame,
-    LeaveGame,
+    StartReplay = 1,
+    JoinGame = 2,
+    PlayGame = 3,
+    RestartGame = 4,
+    LeaveGame = 5,
 }
 
 pub enum ProtocolState {
@@ -139,6 +160,43 @@ pub enum ProtocolState {
     InReplay(ProtocolStateMachine<InReplay>),
     Ended(ProtocolStateMachine<Ended>),
     CloseGame,
+}
+
+fn play_to_completion(mut sm: ProtocolStateMachine<InGame>) -> ProtocolStateMachine<InGame> {
+    use rsc2_pb::sc2_api::{response, Observation, Response, ResponseObservation, Status};
+    use std::convert::TryInto;
+    let mut current_loop = 0;
+    loop {
+        let req_message = sm.inner.gamestate_request(current_loop).unwrap_or_quit();
+        sm.shared = sm.shared.request_gamestate(req_message);
+        match sm.shared.last_response.take() {
+            Some(ret_message) => match ret_message {
+                OwnedMessage::Binary(obs) => {
+                    let observation = Response::decode(obs);
+                    let Response {
+                        status, response, ..
+                    } = observation.unwrap();
+                    if let Ok(Status::Ended) = status.unwrap().try_into() {
+                        break;
+                    }
+
+                    if let response::Response::Observation(ResponseObservation {
+                        observation,
+                        ..
+                    }) = response.unwrap()
+                    {
+                        let Observation { score, .. } = observation.unwrap();
+                        trace!("{:?}", score.unwrap());
+                    }
+                }
+                _ => trace!("Observed a non-binary buffer"),
+            },
+
+            None => trace!("Nothing observed"),
+        }
+        current_loop += 1;
+    }
+    sm
 }
 
 impl ProtocolState {
@@ -169,6 +227,7 @@ impl ProtocolState {
                 // sm.restart_game();
                 InGame(sm.into())
             }
+            (InGame(sm), PlayGame) => Ended(play_to_completion(sm).into()),
             (Ended(_sm), LeaveGame) => {
                 // sm.close_game();
                 Launched(None)

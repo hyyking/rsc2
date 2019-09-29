@@ -18,6 +18,7 @@ fn main() -> Result<(), ParseError> {
     debug!("Connection Established to ws://127.0.0.1:5000/sc2api");
     let create_game = base.run(ProtocolArg::CreateGame);
     let join_game = create_game.run(ProtocolArg::JoinGame);
+    let play_game = join_game.run(ProtocolArg::PlayGame);
 
     Ok(())
 }

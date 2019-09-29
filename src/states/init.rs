@@ -2,7 +2,7 @@ use crate::states::{InGame, IsProtocolState, ProtocolStateMachine};
 
 use rsc2_pb::{prelude::*, sc2_api};
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct InitGame; // InitGame info
 
 impl IsProtocolState for InitGame {

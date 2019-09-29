@@ -2,7 +2,7 @@ use crate::states::{InGame, InReplay, InitGame, IsProtocolState, ProtocolStateMa
 
 use rsc2_pb::{prelude::*, sc2_api};
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Launched; // Launched info
 
 impl IsProtocolState for Launched {
@@ -13,12 +13,6 @@ impl IsProtocolState for Launched {
         sc2_api::Request::with_id(sc2_api::RequestJoinGame::default_config(), 1).into()
     }
     fn start_replay_request(&self) {}
-}
-
-impl Default for Launched {
-    fn default() -> Self {
-        return Launched {};
-    }
 }
 
 /// Launched State launches a SC2 game instance and can transition in either a GameCreation state
