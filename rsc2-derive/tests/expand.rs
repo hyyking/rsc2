@@ -15,7 +15,10 @@ pub mod wrapper {
     }
 }
 
-/*
 #[derive(WrapEnum)]
 struct ShouldFail;
-*/
+
+#[derive(WrapEnum)]
+enum ShouldFailEnumOne {
+    First(),
+}

@@ -1,6 +1,6 @@
 use tokio::prelude::*;
 use tokio::{codec::Framed, net::TcpStream};
-use websocket::{r#async::MessageCodec, OwnedMessage};
+use websocket::OwnedMessage;
 
 use rsc2_pb::prelude::*;
 
@@ -19,7 +19,7 @@ use self::launch::Launched;
 mod replay;
 use self::replay::InReplay;
 
-type FramedStream = Framed<TcpStream, MessageCodec<OwnedMessage>>;
+type FramedStream = Framed<TcpStream, websocket::r#async::MessageCodec<OwnedMessage>>;
 
 fn send_and_receive_sync(
     conn: FramedStream,
@@ -198,14 +198,15 @@ impl std::fmt::Debug for ProtocolState {
     }
 }
 
-impl Into<ProtocolState> for websocket::client::r#async::ClientNew<websocket::r#async::TcpStream> {
+impl Into<ProtocolState> for websocket::client::r#async::ClientNew<TcpStream> {
     fn into(self) -> ProtocolState {
         ProtocolState::Launched(Some(ProtocolStateMachine {
             shared: SharedState {
                 conn: self
-                    .map(|(s, _)| s)
+                    .map_err(|e| error!("{:?}", e))
                     .wait()
-                    .expect(r#"could not connect to the SC2API at "ws://127.0.0.1:5000/sc2api""#),
+                    .expect(r#"could not connect to the SC2API at "ws://127.0.0.1:5000/sc2api""#)
+                    .0,
                 last_response: None,
             },
             inner: Launched::default(),
