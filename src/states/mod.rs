@@ -26,16 +26,16 @@ fn send_and_receive_sync(
     message: OwnedMessage,
 ) -> (Option<OwnedMessage>, FramedStream) {
     conn.send(message)
-        .map_err(|err| error!("{:?}", err))
+        .map_err(|err| error!("Error Sending Message: {:?}", err))
         .map(|stream| {
             stream
                 .into_future()
-                .map_err(|err| error!("{:?}", err.0))
+                .map_err(|err| error!("Error Waiting for Response: {:?}", err.0))
                 .wait() // wait for the reponse
                 .expect("Couldn't resolve response")
         })
         .wait()
-        .expect("Error sending sync message")
+        .expect("Couldn't resolve 'send_and_receive_sync' future")
 }
 
 pub struct SharedState {
