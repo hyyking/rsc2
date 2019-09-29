@@ -9,3 +9,5 @@
 ## TODO
 
 - make rsc2 a futures tokio reactor when state is InGame
+- Implement game configuration process
+- Bot API
