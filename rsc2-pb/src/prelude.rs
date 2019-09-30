@@ -30,6 +30,16 @@ pub use prost::Message;
     Debug(RequestDebug),
 } */
 
+impl sc2_api::RequestJoinGame {
+    pub fn with_race(race: sc2_api::Race) -> Self {
+        use sc2_api::request_join_game::Participation;
+        Self {
+            participation: Some(Participation::Race(race as i32)),
+            ..Self::default_config()
+        }
+    }
+}
+
 impl sc2_api::RequestObservation {
     pub fn nofog(game_loop: u32) -> Self {
         Self {
