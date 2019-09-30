@@ -4,12 +4,14 @@ use tokio::net::TcpStream;
 use tokio::prelude::*;
 use websocket::OwnedMessage;
 
+use crate::bot;
 use crate::states::*;
 use rsc2_pb::prelude::*;
 use rsc2_pb::sc2_api::{response, Observation, Response, ResponseObservation, Status};
 
 fn play_to_completion(mut sm: ProtocolStateMachine<InGame>) -> ProtocolStateMachine<Ended> {
     let mut current_loop = 0;
+    let mut bot: Box<dyn bot::Bot> = sm.inner.bot.take().unwrap();
     loop {
         let req_message = sm.inner.gamestate_request(current_loop).unwrap_or_quit();
         sm.shared = sm.shared.request_gamestate(req_message);
@@ -29,8 +31,7 @@ fn play_to_completion(mut sm: ProtocolStateMachine<InGame>) -> ProtocolStateMach
                         ..
                     }) = response.unwrap()
                     {
-                        let Observation { score, .. } = observation.unwrap();
-                        trace!("{:?}", score.unwrap());
+                        bot.on_step(observation.unwrap(), current_loop);
                     }
                 }
                 _ => trace!("Observed a non-binary buffer"),
@@ -51,15 +52,6 @@ where
     pub inner: S,
 }
 
-impl<S> ProtocolStateMachine<S>
-where
-    S: IsProtocolState,
-{
-    pub fn ping(&self) {
-        debug!("pinged ProtocolStateMachine");
-    }
-}
-
 #[derive(Debug)]
 #[repr(u8)]
 pub enum GameSpeed {
@@ -68,15 +60,13 @@ pub enum GameSpeed {
     Step = 2,
 }
 
-#[derive(Debug)]
-#[repr(u8)]
 pub enum ProtocolArg {
-    CreateGame = 0,
-    StartReplay = 1,
-    JoinGame = 2,
-    PlayGame = 3,
-    RestartGame = 4,
-    LeaveGame = 5,
+    CreateGame,
+    StartReplay,
+    JoinGame(Box<dyn bot::Bot>),
+    PlayGame,
+    RestartGame,
+    LeaveGame,
 }
 
 pub enum ProtocolState {
@@ -102,15 +92,17 @@ impl ProtocolState {
                 // sm.start_replay();
                 InReplay(sm.into())
             }
-            (Launched(Some(mut sm)), JoinGame) => {
-                let req = sm.inner.join_game_request(/* add context */);
+            (Launched(Some(mut sm)), JoinGame(bot)) => {
+                let req = sm.inner.join_game_request(bot.bot_config());
                 sm.shared = sm.shared.join_game(req.unwrap_or_quit());
                 InGame(sm.into())
             }
-            (InitGame(mut sm), JoinGame) => {
-                let req = sm.inner.join_game_request(/* add context */);
-                sm.shared = sm.shared.join_game(req.unwrap_or_quit());
-                InGame(sm.into())
+            (InitGame(sm), JoinGame(bot)) => {
+                let req = sm.inner.join_game_request(bot.bot_config());
+                InGame(ProtocolStateMachine {
+                    shared: sm.shared.join_game(req.unwrap_or_quit()),
+                    inner: crate::states::InGame { bot: Some(bot) },
+                })
             }
             (Ended(sm), RestartGame) => {
                 // sm.restart_game();
@@ -121,12 +113,8 @@ impl ProtocolState {
                 // sm.close_game();
                 Launched(None)
             }
-            (x, y) => {
-                error!(
-                    "Could not transition ProtocolState::{:?} with argument ProtocolArg::{:?}",
-                    x, y
-                );
-                x
+            (_, _) => {
+                panic!("Could not transition ProtocolState");
             }
         }
     }
