@@ -4,7 +4,7 @@ extern crate pretty_env_logger;
 extern crate rsc2;
 
 use log::debug;
-use rsc2::states::{ProtocolArg, ProtocolState};
+use rsc2::engine::{ProtocolArg, ProtocolState};
 use rsc2::websocket::{client::builder::ParseError, ClientBuilder};
 
 #[allow(unused_variables)]
