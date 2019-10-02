@@ -1,8 +1,7 @@
-use crate::proto::sc2_api;
+use crate::sc2_api;
 
-pub use crate::proto::default::*;
-pub use crate::proto::result::*;
-pub use crate::proto::wrap::*;
+pub use crate::default::*;
+pub use crate::result::*;
 
 pub use prost::Message;
 
@@ -30,6 +29,25 @@ pub use prost::Message;
     Ping(RequestPing),
     Debug(RequestDebug),
 } */
+
+impl sc2_api::RequestJoinGame {
+    pub fn with_race(race: sc2_api::Race) -> Self {
+        use sc2_api::request_join_game::Participation;
+        Self {
+            participation: Some(Participation::Race(race as i32)),
+            ..Self::default_config()
+        }
+    }
+}
+
+impl sc2_api::RequestObservation {
+    pub fn nofog(game_loop: u32) -> Self {
+        Self {
+            disable_fog: Some(false),
+            game_loop: Some(game_loop),
+        }
+    }
+}
 
 impl sc2_api::Request {
     pub fn with_id<M>(req: M, id: u32) -> Self

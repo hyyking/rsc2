@@ -3,17 +3,23 @@ name = "rsc2"
 version = "0.1.0"
 authors = ["hyyking <leoduret@outlook.com>"]
 edition = "2018"
-# build = "build.rs"
+
+# TODO: change prost-derive this online crate
+[workspace]
+members = ["rsc2-pb","rsc2-derive"]
+
+[features]
+default = ["logging"]
+logging = ["log", "pretty_env_logger"]
 
 [dependencies]
-tokio = "0.1.22"
-websocket = "0.23.0"
-bytes = "*"
-prost = "0.5"
-prost-derive = "0.5"
+# Core
+rsc2_pb = {path="rsc2-pb"}
+websocket = {version= "0.23.0", features=["async"]}
+tokio = "0.1"
+bytes = "0.4"
+prost = {git = "https://github.com/hyyking/prost.git"}
 
-log = {version="0.4.8", features=["max_level_debug", "release_max_level_info"]}
-pretty_env_logger = "0.3.1"
-
-[build-dependencies]
-# prost-build = "0.5"
+# Logging
+log = {version="0.4.8", features=["max_level_trace", "release_max_level_info"], optional=true}
+pretty_env_logger = {version="0.3.1", optional=true}
