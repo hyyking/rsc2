@@ -1,13 +1,10 @@
 use rsc2_pb::sc2_api;
 
-// use tokio::prelude::Future;
-// pub type RequestFuture = Box<dyn Future<Item = Request, Error = ()>>;
-
-pub trait Configurable {
-    fn bot_config(&self) -> BotConfig;
+pub struct AgentConfig {
+    pub race: sc2_api::Race,
 }
 
-pub trait Bot: Configurable {
+pub trait Agent {
     fn on_start(&mut self, _info: sc2_api::ResponseGameInfo) -> Option<sc2_api::Request> {
         None
     }
@@ -15,8 +12,5 @@ pub trait Bot: Configurable {
     fn on_end(&mut self) -> Option<sc2_api::Request> {
         None
     }
-}
-
-pub struct BotConfig {
-    pub race: sc2_api::Race,
+    fn config(&self) -> AgentConfig;
 }

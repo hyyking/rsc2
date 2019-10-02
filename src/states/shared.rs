@@ -1,3 +1,4 @@
+use crate::agent;
 use tokio::prelude::*;
 use tokio::{codec::Framed, net::TcpStream};
 use websocket::OwnedMessage;
@@ -7,6 +8,7 @@ type FramedStream = Framed<TcpStream, ::websocket::r#async::MessageCodec<OwnedMe
 pub struct SharedState {
     pub conn: FramedStream,
     pub last_response: Option<OwnedMessage>,
+    pub bot: Option<Box<dyn agent::Agent>>,
 }
 
 #[inline]

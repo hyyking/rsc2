@@ -1,11 +1,11 @@
-use crate::bot::{Bot, BotConfig};
+use crate::agent::AgentConfig;
 use rsc2_pb::{prelude::*, sc2_api};
 
 pub trait IsProtocolState {
     fn create_game_request(&self) -> EncodeResult {
         panic!("Invalid Operation");
     }
-    fn join_game_request(&self, _: BotConfig) -> EncodeResult {
+    fn join_game_request(&self, _: AgentConfig) -> EncodeResult {
         panic!("Invalid Operation");
     }
     fn start_replay_request(&self) {
@@ -22,14 +22,14 @@ pub trait IsProtocolState {
     }
 }
 
-fn join_game(bot: BotConfig) -> EncodeResult {
+fn join_game(bot: AgentConfig) -> EncodeResult {
     sc2_api::Request::with_id(sc2_api::RequestJoinGame::with_race(bot.race), 1).into()
 }
 
 #[derive(Debug, Default)]
 pub struct InitGame; // InitGame info
 impl IsProtocolState for InitGame {
-    fn join_game_request(&self, bot: BotConfig) -> EncodeResult {
+    fn join_game_request(&self, bot: AgentConfig) -> EncodeResult {
         join_game(bot)
     }
 }
@@ -41,16 +41,14 @@ impl IsProtocolState for Launched {
     fn create_game_request(&self) -> EncodeResult {
         sc2_api::Request::with_id(sc2_api::RequestCreateGame::default_config(), 0).into()
     }
-    fn join_game_request(&self, bot: BotConfig) -> EncodeResult {
+    fn join_game_request(&self, bot: AgentConfig) -> EncodeResult {
         join_game(bot)
     }
     fn start_replay_request(&self) {}
 }
 
 #[derive(Default)]
-pub struct InGame {
-    pub bot: Option<Box<dyn Bot>>,
-} // InGame info
+pub struct InGame; // InGame info
 impl IsProtocolState for InGame {
     fn gamestate_request(&self, game_loop: u32) -> EncodeResult {
         sc2_api::Request::with_id(sc2_api::RequestObservation::nofog(game_loop), game_loop).into()

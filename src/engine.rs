@@ -4,43 +4,56 @@ use tokio::net::TcpStream;
 use tokio::prelude::*;
 use websocket::OwnedMessage;
 
-use crate::bot;
+use crate::agent;
 use crate::states::*;
 use rsc2_pb::prelude::*;
 use rsc2_pb::sc2_api::{response, Observation, Response, ResponseObservation, Status};
 
+fn handle_response(resp: OwnedMessage) -> Result<Option<Observation>, Status> {
+    match resp {
+        OwnedMessage::Binary(obs) => match Response::decode(obs) {
+            Ok(Response {
+                status: Some(status),
+                response: Some(response),
+                ..
+            }) => {
+                if let Ok(Status::Ended) = status.try_into() {
+                    return Err(Status::Ended);
+                }
+                if let response::Response::Observation(ResponseObservation {
+                    observation, ..
+                }) = response
+                {
+                    return Ok(observation);
+                }
+            }
+            Err(e) => warn!("Couldn't decode a buffer: {}", e),
+            Ok(e) => error!("Unexpected API response {:?}", e),
+        },
+        e => warn!("Observed a non-binary buffer {:?}", e),
+    }
+    Ok(None)
+}
+
 fn play_to_completion(mut sm: ProtocolStateMachine<InGame>) -> ProtocolStateMachine<Ended> {
     let mut current_loop = 0;
-    let mut bot: Box<dyn bot::Bot> = sm.inner.bot.take().unwrap();
+    let mut bot: Box<dyn agent::Agent> = sm.shared.bot.take().unwrap(); // Cannot launch game without a bot so it's always Some(_)
     loop {
         let req_message = sm.inner.gamestate_request(current_loop).unwrap_or_quit();
         sm.shared = sm.shared.request_gamestate(req_message);
         match sm.shared.last_response.take() {
-            Some(ret_message) => match ret_message {
-                OwnedMessage::Binary(obs) => {
-                    let observation = Response::decode(obs);
-                    let Response {
-                        status, response, ..
-                    } = observation.unwrap();
-                    if let Ok(Status::Ended) = status.unwrap().try_into() {
-                        break;
-                    }
-
-                    if let response::Response::Observation(ResponseObservation {
-                        observation,
-                        ..
-                    }) = response.unwrap()
-                    {
-                        bot.on_step(observation.unwrap(), current_loop);
-                    }
+            Some(ret_message) => match handle_response(ret_message) {
+                Ok(Some(observation)) => {
+                    let _req = bot.on_step(observation, current_loop);
                 }
-                _ => trace!("Observed a non-binary buffer"),
+                Err(Status::Ended) => break,
+                Ok(None) | Err(_) => trace!("No action for step: {}", current_loop),
             },
-
-            None => trace!("Nothing observed"),
+            None => trace!("Nothing observed for step: {}", current_loop),
         }
         current_loop += 1;
     }
+    sm.shared.bot = Some(bot);
     sm.into()
 }
 
@@ -63,7 +76,7 @@ pub enum GameSpeed {
 pub enum ProtocolArg {
     CreateGame,
     StartReplay,
-    JoinGame(Box<dyn bot::Bot>),
+    JoinGame(Box<dyn agent::Agent>),
     PlayGame,
     RestartGame,
     LeaveGame,
@@ -83,36 +96,33 @@ impl ProtocolState {
         use self::{ProtocolArg::*, ProtocolState::*};
         match (self, arg) {
             (Launched(None), _) => CloseGame,
+
             (Launched(Some(mut sm)), CreateGame) => {
                 let req = sm.inner.create_game_request(/* add context */);
                 sm.shared = sm.shared.create_game(req.unwrap());
                 InitGame(sm.into())
             }
-            (Launched(Some(sm)), StartReplay) => {
-                // sm.start_replay();
-                InReplay(sm.into())
-            }
+            (Launched(Some(sm)), StartReplay) => InReplay(sm.into()),
+
             (Launched(Some(mut sm)), JoinGame(bot)) => {
-                let req = sm.inner.join_game_request(bot.bot_config());
+                let req = sm.inner.join_game_request(bot.config());
                 sm.shared = sm.shared.join_game(req.unwrap_or_quit());
+                sm.shared.bot = Some(bot);
                 InGame(sm.into())
             }
-            (InitGame(sm), JoinGame(bot)) => {
-                let req = sm.inner.join_game_request(bot.bot_config());
-                InGame(ProtocolStateMachine {
-                    shared: sm.shared.join_game(req.unwrap_or_quit()),
-                    inner: crate::states::InGame { bot: Some(bot) },
-                })
-            }
-            (Ended(sm), RestartGame) => {
-                // sm.restart_game();
+
+            (InitGame(mut sm), JoinGame(bot)) => {
+                let req = sm.inner.join_game_request(bot.config());
+                sm.shared = sm.shared.join_game(req.unwrap_or_quit());
+                sm.shared.bot = Some(bot);
                 InGame(sm.into())
             }
+
+            (Ended(sm), RestartGame) => InGame(sm.into()),
+
             (InGame(sm), PlayGame) => Ended(play_to_completion(sm)),
-            (Ended(_sm), LeaveGame) => {
-                // sm.close_game();
-                Launched(None)
-            }
+
+            (Ended(_), LeaveGame) => Launched(None),
             (_, _) => {
                 panic!("Could not transition ProtocolState");
             }
@@ -144,6 +154,7 @@ impl Into<ProtocolState> for websocket::client::r#async::ClientNew<TcpStream> {
                     .expect(r#"could not connect to the SC2API at "ws://127.0.0.1:5000/sc2api""#)
                     .0,
                 last_response: None,
+                bot: None,
             },
             inner: Launched::default(),
         }))

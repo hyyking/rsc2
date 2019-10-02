@@ -9,7 +9,7 @@ extern crate rsc2_pb;
 
 pub(crate) mod states;
 
-pub mod bot;
+pub mod agent;
 pub mod engine;
 pub use rsc2_pb::prelude;
 pub use rsc2_pb::sc2_api;
