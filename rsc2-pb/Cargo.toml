@@ -13,4 +13,3 @@ rsc2_derive = {path="../rsc2-derive"}
 
 [build-dependencies]
 prost-build = {git = "https://github.com/hyyking/prost.git"}
-

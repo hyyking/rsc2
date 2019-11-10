@@ -1,5 +1,3 @@
-extern crate prost_build;
-
 const DERIVE_WRAPENUM: &str = "#[derive(::rsc2_derive::WrapEnum)]";
 const DERIVE_TRYINTOENUM: &str = "#[derive(::rsc2_derive::TryIntoEnum)]";
 
@@ -13,8 +11,8 @@ fn main() {
 
     prost_build
         .compile_protos(
-            &["../s2client-proto/s2clientprotocol/sc2api.proto"],
-            &["../s2client-proto"],
+            &["s2client-proto/s2clientprotocol/sc2api.proto"],
+            &["s2client-proto"],
         )
         .unwrap();
 }
