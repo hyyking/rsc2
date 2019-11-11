@@ -8,7 +8,7 @@ build = "build.rs"
 [dependencies]
 bytes = "0.4.7"
 prost = {git = "https://github.com/hyyking/prost.git"}
-websocket = {version="0.23.*", features=["async"]}
+websocket-lite = {version="0.3.1-alpha.6"}
 rsc2_derive = {path="../rsc2-derive"}
 
 [build-dependencies]
