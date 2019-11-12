@@ -5,8 +5,6 @@ authors = ["hyyking <leoduret@outlook.com>"]
 edition = "2018"
 
 [dependencies]
-rsc2_pb = {path="../rsc2-pb"}
-websocket-lite = "0.3.1-alpha.6"
+rsc2_pb = {path="../rsc2-pb", features=["codec"]}
 tokio = "0.2.0-alpha.6"
-futures = "0.3.1"
-prost = {git = "https://github.com/hyyking/prost.git"}
+websocket-lite = "0.3.1-alpha.6"
