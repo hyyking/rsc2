@@ -1,5 +1,7 @@
 mod default;
-mod result;
+
+#[cfg(feature = "codec")]
+pub mod codec;
 
 pub mod prelude;
 
