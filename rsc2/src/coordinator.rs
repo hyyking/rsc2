@@ -5,6 +5,7 @@ use std::convert::TryFrom;
 use std::io;
 
 use rsc2_pb::{codec, sc2_api};
+use tokio::runtime::Runtime;
 
 macro_rules! validate_status {
     ($status:expr => $variant:path) => {{
@@ -14,7 +15,11 @@ macro_rules! validate_status {
             .ok_or_else(|| io::Error::new(io::ErrorKind::ConnectionAborted, "Missing Status Code"))
             .and_then(|status| match sc2_api::Status::try_from(status).ok() {
                 Some($variant) => Ok(()),
-                Some(_) | None => Err(io::Error::new(
+                Some(e) => Err(io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    format!(r#"Unexpected "{:?}""#, e),
+                )),
+                None => Err(io::Error::new(
                     io::ErrorKind::ConnectionAborted,
                     "Wrong status Code",
                 )),
@@ -91,7 +96,7 @@ impl Coordinator {
                 Commands::CreateGame { request } => {
                     let request = sc2_api::Request::with_id(request, request_count);
                     let response =
-                        rt.block_on(requests::to_response(self.get_mut_stream()?, request))?;
+                        rt.block_on(requests::with_response(self.get_mut_stream()?, request))?;
                     validate_status!(response.status => sc2_api::Status::InitGame)?;
 
                     self.sm.initgame()
@@ -99,39 +104,39 @@ impl Coordinator {
                 Commands::JoinGame { request } => {
                     let request = sc2_api::Request::with_id(request, request_count);
                     let response =
-                        rt.block_on(requests::to_response(self.get_mut_stream()?, request))?;
+                        rt.block_on(requests::with_response(self.get_mut_stream()?, request))?;
                     validate_status!(response.status => sc2_api::Status::InGame)?;
 
                     self.sm.ingame();
-                    // Execute game logic
+                    request_count = self.play_game(&rt, request_count)?;
                     self.sm.ended();
                 }
                 Commands::StartReplay { request } => {
                     let request = sc2_api::Request::with_id(request, request_count);
                     let response =
-                        rt.block_on(requests::to_response(self.get_mut_stream()?, request))?;
+                        rt.block_on(requests::with_response(self.get_mut_stream()?, request))?;
                     validate_status!(response.status => sc2_api::Status::InReplay)?;
 
                     self.sm.inreplay();
-                    // Execute replay logic
+                    // Execute game logic
                     self.sm.ended();
                 }
                 Commands::RestartGame { .. } => {
                     let request =
                         sc2_api::Request::with_id(sc2_api::RequestRestartGame {}, request_count);
                     let response =
-                        rt.block_on(requests::to_response(self.get_mut_stream()?, request))?;
+                        rt.block_on(requests::with_response(self.get_mut_stream()?, request))?;
                     validate_status!(response.status => sc2_api::Status::InGame)?;
 
                     self.sm.ingame();
-                    // Execute game logic
+                    request_count = self.play_game(&rt, request_count)?;
                     self.sm.ended();
                 }
                 Commands::LeaveGame { .. } => {
                     let request =
                         sc2_api::Request::with_id(sc2_api::RequestLeaveGame {}, request_count);
                     let response =
-                        rt.block_on(requests::to_response(self.get_mut_stream()?, request))?;
+                        rt.block_on(requests::with_response(self.get_mut_stream()?, request))?;
                     validate_status!(response.status => sc2_api::Status::Launched)?;
 
                     self.sm.reset();
@@ -140,7 +145,7 @@ impl Coordinator {
                 Commands::QuitGame { .. } => {
                     let request = sc2_api::Request::with_id(sc2_api::RequestQuit {}, request_count);
                     let response =
-                        rt.block_on(requests::to_response(self.get_mut_stream()?, request))?;
+                        rt.block_on(requests::with_response(self.get_mut_stream()?, request))?;
                     validate_status!(response.status => sc2_api::Status::Quit)?;
 
                     self.sm.reset();
@@ -219,15 +224,49 @@ impl Coordinator {
             "Engine is not connected to a SC2 instance",
         ))
     }
+
+    fn play_game(&mut self, rt: &Runtime, start: u32) -> io::Result<u32> {
+        //use rsc2_pb::prelude::*;
+        use sc2_api::{
+            response::Response::Observation as Obs, Request as Req, RequestObservation as ReqObs,
+            ResponseObservation as RespObs, Status,
+        };
+
+        let mut count = start;
+        let conn = self.get_mut_stream()?;
+        loop {
+            count += 1;
+            let request = Req::with_id(ReqObs::nofog(count), count);
+            let response = rt.block_on(requests::with_filter_response(conn, request))?;
+            validate_status!(response.status => Status::InGame)?;
+            match response {
+                sc2_api::Response {
+                    status,
+                    response: Some(response),
+                    ..
+                } => {
+                    if validate_status!(status => Status::Ended).is_ok() {
+                        break Ok(count);
+                    }
+                    if let Obs(RespObs { observation: _, .. }) = response {}
+                }
+                r @ _ => eprintln!("unhandled response:\n{:#?}", r),
+            }
+        }
+    }
 }
 
 mod requests {
     use std::io;
 
+    use futures::{
+        future::{ready, Ready},
+        sink::SinkExt,
+        stream::{Stream, StreamExt},
+    };
     use rsc2_pb::{codec::SC2ProtobufClient, sc2_api};
-    use tokio::prelude::*;
 
-    pub(crate) async fn to_response(
+    pub(crate) async fn with_response(
         conn: &mut SC2ProtobufClient,
         request: sc2_api::Request,
     ) -> io::Result<sc2_api::Response> {
@@ -236,6 +275,22 @@ mod requests {
             io::ErrorKind::ConnectionAborted,
             "No response for request",
         ))?
+    }
+
+    pub(crate) async fn with_filter_response(
+        conn: &mut SC2ProtobufClient,
+        request: sc2_api::Request,
+    ) -> io::Result<sc2_api::Response> {
+        let id = request.id;
+        let mut conn = conn.filter(|resp| id_filter(resp, id));
+        conn.send(request).await?;
+        conn.next().await.ok_or(io::Error::new(
+            io::ErrorKind::ConnectionAborted,
+            "No response for request",
+        ))?
+    }
+    fn id_filter(resp: &<SC2ProtobufClient as Stream>::Item, id: Option<u32>) -> Ready<bool> {
+        ready(resp.as_ref().ok().filter(|r| r.id == id).is_some())
     }
 }
 

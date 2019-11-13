@@ -5,12 +5,13 @@ pub struct AgentConfig {
 }
 
 pub trait Agent {
+    fn config(&self) -> AgentConfig;
+    fn on_step(&mut self, info: sc2_api::Observation, tick: u32) -> Option<sc2_api::Request>;
+
     fn on_start(&mut self, _info: sc2_api::ResponseGameInfo) -> Option<sc2_api::Request> {
         None
     }
-    fn on_step(&mut self, info: sc2_api::Observation, tick: u32) -> Option<sc2_api::Request>;
     fn on_end(&mut self) -> Option<sc2_api::Request> {
         None
     }
-    fn config(&self) -> AgentConfig;
 }
