@@ -6,7 +6,7 @@ pub trait DefaultConfig {
 
 impl DefaultConfig for Vec<sc2_api::PlayerSetup> {
     fn default_config() -> Self {
-        /// Player vs Terran Easy Ai
+        // Player vs Terran Easy Ai
         vec![
             sc2_api::PlayerSetup::player(),
             sc2_api::PlayerSetup::custom_bot(

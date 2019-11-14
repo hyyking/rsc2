@@ -1,8 +1,6 @@
 use crate::sc2_api;
 
 pub use crate::default::*;
-pub use crate::result::*;
-
 pub use prost::Message;
 
 /* pub enum Request {
@@ -52,7 +50,7 @@ impl sc2_api::RequestObservation {
 impl sc2_api::Request {
     pub fn with_id<M>(req: M, id: u32) -> Self
     where
-        M: Message + Into<sc2_api::request::Request>,
+        M: Into<sc2_api::request::Request>,
     {
         Self {
             id: Some(id),
@@ -172,4 +170,20 @@ impl sc2_api::InterfaceOptions {
             raw_crop_to_playable_area: Some(true),
         }
     } */
+}
+
+impl sc2_api::RequestStartReplay {
+    pub fn from_file<T: Into<String>>(file: T) -> Self {
+        Self {
+            map_data: None,
+            observed_player_id: None,
+            options: None,
+            disable_fog: None,
+            realtime: None,
+            record_replay: None,
+            replay: Some(sc2_api::request_start_replay::Replay::ReplayPath(
+                file.into(),
+            )),
+        }
+    }
 }
