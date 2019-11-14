@@ -6,6 +6,7 @@ edition = "2018"
 
 [dev-dependencies]
 rsc2 = {path = "../rsc2"}
+pretty_env_logger = "0.3.1"
 
 [[example]]
 name = "dev"

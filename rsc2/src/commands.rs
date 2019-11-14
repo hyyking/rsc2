@@ -1,7 +1,11 @@
+use crate::agent;
 use rsc2_pb::sc2_api;
 
 #[derive(Clone)]
-pub enum Commands {
+pub enum Commands<T>
+where
+    T: agent::Agent,
+{
     /// Game has already been launched
     Launched {},
     /// Create a new game
@@ -10,10 +14,12 @@ pub enum Commands {
     },
     /// Join an existing game
     JoinGame {
+        agent: T,
         request: sc2_api::RequestJoinGame,
     },
     /// Start a replay
     StartReplay {
+        agent: T,
         request: sc2_api::RequestStartReplay,
     },
     /// Restart a game
@@ -23,7 +29,10 @@ pub enum Commands {
     QuitGame {},
 }
 
-impl From<&Commands> for Commands {
+impl<T> From<&Commands<T>> for Commands<T>
+where
+    T: Clone + agent::Agent,
+{
     fn from(other: &Self) -> Self {
         other.clone()
     }

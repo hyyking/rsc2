@@ -50,7 +50,7 @@ impl sc2_api::RequestObservation {
 impl sc2_api::Request {
     pub fn with_id<M>(req: M, id: u32) -> Self
     where
-        M: Message + Into<sc2_api::request::Request>,
+        M: Into<sc2_api::request::Request>,
     {
         Self {
             id: Some(id),

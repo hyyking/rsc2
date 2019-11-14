@@ -1,8 +1,9 @@
-use crate::Commands;
-
 use std::cell::Cell;
 use std::convert::TryFrom;
 use std::io;
+
+use crate::agent;
+use crate::Commands;
 
 use rsc2_pb::{codec, sc2_api};
 use tokio::runtime::Runtime;
@@ -63,27 +64,34 @@ impl StateMachine {
     bit_flag!(ended as 4; is_ended);
 }
 
-pub struct Coordinator {
+pub struct Coordinator<T>
+where
+    T: agent::Agent + 'static,
+{
     sm: StateMachine,
     conn: Option<codec::SC2ProtobufClient>,
+    agent: Option<T>,
 }
 
-impl Coordinator {
+impl<T> Coordinator<T>
+where
+    T: agent::Agent,
+{
     pub fn new() -> Self {
         Self {
             sm: StateMachine::new(),
             conn: None,
+            agent: None,
         }
     }
 
     pub fn run<Iter, Item>(&mut self, elements: Iter) -> io::Result<u32>
     where
+        Item: Into<Commands<T>>,
         Iter: IntoIterator<Item = Item>,
-        Item: Into<Commands>,
     {
         let mut request_count: u32 = 0;
         let rt = tokio::runtime::Builder::new().build().unwrap();
-
         for element in elements.into_iter().map(|el| el.into()).into_iter() {
             request_count += 1;
             self.validate(&element)?;
@@ -101,7 +109,9 @@ impl Coordinator {
 
                     self.sm.initgame()
                 }
-                Commands::JoinGame { request } => {
+                Commands::JoinGame { request, agent } => {
+                    self.agent = Some(agent);
+
                     let request = sc2_api::Request::with_id(request, request_count);
                     let response =
                         rt.block_on(requests::with_response(self.get_mut_stream()?, request))?;
@@ -111,7 +121,9 @@ impl Coordinator {
                     request_count = self.play_game(&rt, request_count)?;
                     self.sm.ended();
                 }
-                Commands::StartReplay { request } => {
+                Commands::StartReplay { request, agent } => {
+                    self.agent = Some(agent);
+
                     let request = sc2_api::Request::with_id(request, request_count);
                     let response =
                         rt.block_on(requests::with_response(self.get_mut_stream()?, request))?;
@@ -152,10 +164,11 @@ impl Coordinator {
                 }
             }
         }
+        rt.shutdown_on_idle();
         Ok(request_count)
     }
 
-    fn validate(&self, command: &Commands) -> io::Result<()> {
+    fn validate(&self, command: &Commands<T>) -> io::Result<()> {
         let fast_err = |message: &'static str| -> io::Result<()> {
             Err(io::Error::new(io::ErrorKind::InvalidInput, message))
         };
@@ -224,35 +237,117 @@ impl Coordinator {
             "Engine is not connected to a SC2 instance",
         ))
     }
+    fn get_stream(&mut self) -> io::Result<codec::SC2ProtobufClient> {
+        self.conn.take().ok_or(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "Engine is not connected to a SC2 instance",
+        ))
+    }
+
+    fn get_agent(&mut self) -> io::Result<T> {
+        self.agent
+            .take()
+            .ok_or(io::Error::new(io::ErrorKind::NotFound, "No agent"))
+    }
 
     fn play_game(&mut self, rt: &Runtime, start: u32) -> io::Result<u32> {
-        //use rsc2_pb::prelude::*;
+        use futures::stream::{Iter, StreamExt};
         use sc2_api::{
-            response::Response::Observation as Obs, Request as Req, RequestObservation as ReqObs,
+            response::Response::Observation as Obs, Request, RequestObservation as ReqObs,
             ResponseObservation as RespObs, Status,
         };
+        use std::sync::mpsc::{self, TryIter};
+        use tokio::sync::watch;
+
+        enum MachineStatus {
+            Empty,
+            Full(sc2_api::response::Response),
+        }
 
         let mut count = start;
-        let conn = self.get_mut_stream()?;
-        loop {
-            count += 1;
-            let request = Req::with_id(ReqObs::nofog(count), count);
-            let response = rt.block_on(requests::with_filter_response(conn, request))?;
-            validate_status!(response.status => Status::InGame)?;
-            match response {
-                sc2_api::Response {
-                    status,
-                    response: Some(response),
-                    ..
-                } => {
-                    if validate_status!(status => Status::Ended).is_ok() {
-                        break Ok(count);
+        let mut conn = self.get_stream()?;
+        let mut agent = self.get_agent()?;
+
+        rt.block_on(async move {
+            let (mut tx, rx) = watch::channel(MachineStatus::Empty);
+            let (sender, receiver) = mpsc::channel();
+            let mut receiver: Iter<TryIter<sc2_api::request::Request>> =
+                tokio::stream::iter(receiver.try_iter());
+
+            // Agent side
+            rt.spawn({
+                let client = sender.clone();
+                let mut rx = rx.clone();
+                async move {
+                    while let Some(watched) = rx.recv_ref().await {
+                        let response = match *watched {
+                            MachineStatus::Full(ref resp) => resp,
+                            _ => continue,
+                        };
+                        if let Obs(RespObs {
+                            observation: Some(observation),
+                            ..
+                        }) = response
+                        {
+                            if let Some(request) = agent.on_step(observation) {
+                                if client.send(request.into()).is_err() {
+                                    break;
+                                }
+                            };
+                        };
                     }
-                    if let Obs(RespObs { observation: _, .. }) = response {}
                 }
-                r @ _ => eprintln!("unhandled response:\n{:#?}", r),
+            });
+
+            // Observation requests producer
+            rt.spawn({
+                let mut rx = rx.clone();
+                async move {
+                    while let Some(_) = rx.recv_ref().await {
+                        let req = ReqObs::nofog(count);
+                        if sender.send(req.into()).is_err() {
+                            break;
+                        };
+                    }
+                }
+            });
+
+            loop {
+                let request = match receiver.next().await {
+                    Some(req) => req,
+                    None => continue,
+                };
+                count += 1;
+
+                let response = async {
+                    let r =
+                        requests::with_filter_response(&mut conn, Request::with_id(request, count))
+                            .await
+                            .map_err(|err| err);
+                    if r.is_err() {
+                        tx.closed().await;
+                    }
+                    r
+                };
+
+                let sc2_api::Response {
+                    response, status, ..
+                } = response.await?;
+
+                if validate_status!(status => Status::Ended).is_ok() {
+                    tx.closed().await;
+                    break;
+                };
+                match response {
+                    Some(resp) => tx.broadcast(MachineStatus::Full(resp)),
+                    None => tx.broadcast(MachineStatus::Empty),
+                }
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::BrokenPipe, "responses channel closed")
+                })?;
             }
-        }
+            Ok(count)
+        })
     }
 }
 
@@ -294,6 +389,7 @@ mod requests {
     }
 }
 
+/*
 #[cfg(test)]
 mod coordinator_states {
     use super::*;
@@ -503,4 +599,4 @@ mod coordinator_states {
         ])
         .unwrap()
     }
-}
+} */
