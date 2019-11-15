@@ -15,40 +15,42 @@ pub mod builder {
 
     pub struct RawRequestGame<T>
     where
-        T: agent::Agent,
+        T: agent::AgentHook,
     {
-        message: Vec<Commands<T>>,
+        messages: Vec<Commands<T>>,
     }
     impl<T> RawRequestGame<T>
     where
-        T: agent::Agent,
+        T: agent::AgentHook,
     {
         pub fn new(
             agent: T,
             create: sc2_api::RequestCreateGame,
             join: sc2_api::RequestJoinGame,
         ) -> Self {
-            let mut message = Vec::with_capacity(5);
-            message.push(Commands::Launched {});
-            message.push(Commands::CreateGame { request: create });
-            message.push(Commands::JoinGame {
+            let mut messages = Vec::with_capacity(5);
+            messages.push(Commands::Launched {
+                socket: "127.0.0.1:5000".parse().unwrap(),
+            });
+            messages.push(Commands::CreateGame { request: create });
+            messages.push(Commands::JoinGame {
                 request: join,
                 agent,
             });
-            message.push(Commands::LeaveGame {});
-            message.push(Commands::QuitGame {});
-            Self { message }
+            messages.push(Commands::LeaveGame {});
+            messages.push(Commands::QuitGame {});
+            Self { messages }
         }
     }
     impl<T> IntoIterator for RawRequestGame<T>
     where
-        T: agent::Agent,
+        T: agent::AgentHook,
     {
         type Item = Commands<T>;
         type IntoIter = std::vec::IntoIter<Self::Item>;
 
         fn into_iter(self) -> Self::IntoIter {
-            self.message.into_iter()
+            self.messages.into_iter()
         }
     }
 }

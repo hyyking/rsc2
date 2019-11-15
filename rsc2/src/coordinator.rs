@@ -1,32 +1,24 @@
 use std::cell::Cell;
-use std::convert::TryFrom;
 use std::io;
+use std::sync::mpsc;
 
 use crate::agent;
 use crate::Commands;
 
-use rsc2_pb::{codec, sc2_api};
-use tokio::runtime::Runtime;
-
-macro_rules! validate_status {
-    ($status:expr => $variant:path) => {{
-        let status: Option<i32> = $status;
-        let _: sc2_api::Status = $variant;
-        status
-            .ok_or_else(|| io::Error::new(io::ErrorKind::ConnectionAborted, "Missing Status Code"))
-            .and_then(|status| match sc2_api::Status::try_from(status).ok() {
-                Some($variant) => Ok(()),
-                Some(e) => Err(io::Error::new(
-                    io::ErrorKind::ConnectionAborted,
-                    format!(r#"Unexpected "{:?}""#, e),
-                )),
-                None => Err(io::Error::new(
-                    io::ErrorKind::ConnectionAborted,
-                    "Wrong status Code",
-                )),
-            })
-    }};
-}
+use futures::stream::StreamExt;
+use rsc2_pb::{
+    codec::SC2ProtobufClient,
+    sc2_api::{
+        Request, RequestLeaveGame, RequestObservation, RequestQuit, RequestRestartGame, Response,
+        Status,
+    },
+    validate_status,
+};
+use tokio::{
+    runtime::Runtime,
+    stream::iter,
+    sync::{oneshot, watch},
+};
 
 macro_rules! bit_flag {
     ($set_f:ident as $val:literal; $check_f:ident) => {
@@ -42,12 +34,6 @@ macro_rules! bit_flag {
     };
 }
 
-// 0000 0000
-// first bit: Launched ?
-// second bit: InitGame ?
-// third bit:  InReplay ?
-// fourth bit: InGame ?
-// fith bit: Ended ?
 struct StateMachine(Cell<u8>);
 
 impl StateMachine {
@@ -66,108 +52,106 @@ impl StateMachine {
 
 pub struct Coordinator<T>
 where
-    T: agent::Agent + 'static,
+    T: agent::AgentHook + 'static,
 {
     sm: StateMachine,
-    conn: Option<codec::SC2ProtobufClient>,
-    agent: Option<T>,
+    conn: Cell<Option<SC2ProtobufClient>>,
+    agent: Cell<Option<T>>,
 }
 
 impl<T> Coordinator<T>
 where
-    T: agent::Agent,
+    T: agent::AgentHook,
 {
     pub fn new() -> Self {
         Self {
             sm: StateMachine::new(),
-            conn: None,
-            agent: None,
+            conn: Cell::new(None),
+            agent: Cell::new(None),
         }
     }
 
-    pub fn run<Iter, Item>(&mut self, elements: Iter) -> io::Result<u32>
+    pub fn run<Iter, Item>(&self, elements: Iter) -> io::Result<u32>
     where
         Item: Into<Commands<T>>,
         Iter: IntoIterator<Item = Item>,
     {
         let mut request_count: u32 = 0;
-        let rt = tokio::runtime::Builder::new().build().unwrap();
+        let rt = tokio::runtime::Builder::new()
+            .core_threads(4)
+            .build()
+            .unwrap();
+
         for element in elements.into_iter().map(|el| el.into()).into_iter() {
             request_count += 1;
             self.validate(&element)?;
             match element {
-                Commands::Launched { .. } => {
-                    let stream = rt.block_on(self.init_connection())?;
-                    self.conn = Some(stream);
+                Commands::Launched { socket, .. } => {
+                    self.conn
+                        .set(Some(rt.block_on(requests::init_connection(socket))?));
                     self.sm.launched()
                 }
                 Commands::CreateGame { request } => {
-                    let request = sc2_api::Request::with_id(request, request_count);
                     let response =
-                        rt.block_on(requests::with_response(self.get_mut_stream()?, request))?;
-                    validate_status!(response.status => sc2_api::Status::InitGame)?;
+                        self.send_request(&rt, Request::with_id(request, request_count))?;
+                    validate_status!(response.status => Status::InitGame)?;
 
                     self.sm.initgame()
                 }
                 Commands::JoinGame { request, agent } => {
-                    self.agent = Some(agent);
+                    self.agent.set(Some(agent));
 
-                    let request = sc2_api::Request::with_id(request, request_count);
                     let response =
-                        rt.block_on(requests::with_response(self.get_mut_stream()?, request))?;
-                    validate_status!(response.status => sc2_api::Status::InGame)?;
+                        self.send_request(&rt, Request::with_id(request, request_count))?;
+                    validate_status!(response.status => Status::InGame)?;
 
                     self.sm.ingame();
                     request_count = self.play_game(&rt, request_count)?;
                     self.sm.ended();
                 }
                 Commands::StartReplay { request, agent } => {
-                    self.agent = Some(agent);
+                    self.agent.set(Some(agent));
 
-                    let request = sc2_api::Request::with_id(request, request_count);
                     let response =
-                        rt.block_on(requests::with_response(self.get_mut_stream()?, request))?;
-                    validate_status!(response.status => sc2_api::Status::InReplay)?;
+                        self.send_request(&rt, Request::with_id(request, request_count))?;
+                    validate_status!(response.status => Status::InReplay)?;
 
                     self.sm.inreplay();
                     // Execute game logic
                     self.sm.ended();
                 }
                 Commands::RestartGame { .. } => {
-                    let request =
-                        sc2_api::Request::with_id(sc2_api::RequestRestartGame {}, request_count);
-                    let response =
-                        rt.block_on(requests::with_response(self.get_mut_stream()?, request))?;
-                    validate_status!(response.status => sc2_api::Status::InGame)?;
+                    let response = self.send_request(
+                        &rt,
+                        Request::with_id(RequestRestartGame {}, request_count),
+                    )?;
+                    validate_status!(response.status => Status::InGame)?;
 
                     self.sm.ingame();
                     request_count = self.play_game(&rt, request_count)?;
                     self.sm.ended();
                 }
                 Commands::LeaveGame { .. } => {
-                    let request =
-                        sc2_api::Request::with_id(sc2_api::RequestLeaveGame {}, request_count);
-                    let response =
-                        rt.block_on(requests::with_response(self.get_mut_stream()?, request))?;
-                    validate_status!(response.status => sc2_api::Status::Launched)?;
+                    let response = self
+                        .send_request(&rt, Request::with_id(RequestLeaveGame {}, request_count))?;
+                    validate_status!(response.status => Status::Launched)?;
 
                     self.sm.reset();
                     self.sm.launched();
                 }
                 Commands::QuitGame { .. } => {
-                    let request = sc2_api::Request::with_id(sc2_api::RequestQuit {}, request_count);
                     let response =
-                        rt.block_on(requests::with_response(self.get_mut_stream()?, request))?;
-                    validate_status!(response.status => sc2_api::Status::Quit)?;
+                        self.send_request(&rt, Request::with_id(RequestQuit {}, request_count))?;
+                    validate_status!(response.status => Status::Quit)?;
 
                     self.sm.reset();
                 }
             }
         }
-        rt.shutdown_on_idle();
+        rt.shutdown_now();
         Ok(request_count)
     }
-
+    /// {{{
     fn validate(&self, command: &Commands<T>) -> io::Result<()> {
         let fast_err = |message: &'static str| -> io::Result<()> {
             Err(io::Error::new(io::ErrorKind::InvalidInput, message))
@@ -219,11 +203,118 @@ where
         }
         Ok(())
     }
+    /// }}}
 
-    async fn init_connection(&self) -> io::Result<codec::SC2ProtobufClient> {
-        use websocket_lite::ClientBuilder;
-        let builder = ClientBuilder::new("ws://127.0.0.1:5000/sc2api").unwrap();
-        Ok(codec::from_framed(
+    fn get_stream(&self) -> io::Result<SC2ProtobufClient> {
+        self.conn.take().ok_or(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "Engine is not connected to a SC2 instance",
+        ))
+    }
+
+    fn get_agent(&self) -> io::Result<T> {
+        self.agent.take().ok_or(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Engine has no agent to run",
+        ))
+    }
+
+    fn send_request(&self, rt: &Runtime, request: Request) -> io::Result<Response> {
+        let mut conn = self.get_stream()?;
+        let response = rt.block_on(requests::filter_response(&mut conn, request))?;
+        self.conn.set(Some(conn));
+        Ok(response)
+    }
+
+    fn play_game(&self, rt: &Runtime, mut count: u32) -> io::Result<u32> {
+        let mut conn = self.get_stream()?;
+        let agent = self.get_agent()?;
+
+        let game_result: io::Result<u32> = rt.block_on(async {
+            let (mut broadcaster, mut watcher) = watch::channel(MachineStatus::Empty);
+            let (req_producer, req_receiver) = mpsc::channel();
+            let (ret_agent, rec_agent) = oneshot::channel();
+
+            // Agent side
+            rt.spawn(requests::agent_client(
+                agent,
+                req_producer.clone(),
+                watcher.clone(),
+                ret_agent,
+            ));
+
+            // Observation requests producer
+            rt.spawn(async move {
+                while let Some(_) = watcher.recv_ref().await {
+                    let req = RequestObservation::nofog(count); // Make better observations
+                    if req_producer.send(req.into()).is_err() {
+                        break;
+                    };
+                }
+            });
+
+            let mut reqstream = iter(req_receiver.try_iter());
+            loop {
+                let request = match reqstream.next().await {
+                    Some(req) => req,
+                    None => continue,
+                };
+
+                count += 1;
+                let r =
+                    requests::filter_response(&mut conn, Request::with_id(request, count)).await;
+                if r.is_err() {
+                    broadcaster.closed().await;
+                };
+                let response = r?;
+
+                if validate_status!(response.status => Status::Ended).is_ok() {
+                    broadcaster.closed().await;
+                    break;
+                };
+                broadcaster
+                    .broadcast(MachineStatus::Full(response))
+                    .map_err(|_| {
+                        io::Error::new(io::ErrorKind::BrokenPipe, "responses channel closed")
+                    })?;
+            }
+            self.agent.set(rec_agent.await.ok());
+            Ok(count)
+        });
+        self.conn.set(Some(conn));
+        game_result
+    }
+}
+
+pub(self) enum MachineStatus {
+    Empty,
+    Full(Response),
+}
+
+mod requests {
+    use std::io;
+    use std::net::SocketAddrV4;
+    use std::sync::mpsc;
+
+    use super::MachineStatus;
+    use crate::agent::AgentHook;
+
+    use futures::{
+        future::{ready, Ready},
+        sink::SinkExt,
+        stream::{Stream, StreamExt},
+    };
+    use rsc2_pb::{
+        codec::{from_framed, SC2ProtobufClient},
+        sc2_api::{request::Request as rRequest, Request, Response},
+    };
+    use tokio::sync::{oneshot, watch};
+    use websocket_lite::ClientBuilder;
+
+    pub(super) async fn init_connection(addr: SocketAddrV4) -> io::Result<SC2ProtobufClient> {
+        let builder =
+            ClientBuilder::new(&format!("ws://{}:{}/sc2api", addr.ip(), addr.port())).unwrap();
+        Ok(from_framed(
             builder
                 .async_connect_insecure()
                 .await
@@ -231,151 +322,10 @@ where
         ))
     }
 
-    fn get_mut_stream(&mut self) -> io::Result<&mut codec::SC2ProtobufClient> {
-        self.conn.as_mut().ok_or(io::Error::new(
-            io::ErrorKind::NotConnected,
-            "Engine is not connected to a SC2 instance",
-        ))
-    }
-    fn get_stream(&mut self) -> io::Result<codec::SC2ProtobufClient> {
-        self.conn.take().ok_or(io::Error::new(
-            io::ErrorKind::NotConnected,
-            "Engine is not connected to a SC2 instance",
-        ))
-    }
-
-    fn get_agent(&mut self) -> io::Result<T> {
-        self.agent
-            .take()
-            .ok_or(io::Error::new(io::ErrorKind::NotFound, "No agent"))
-    }
-
-    fn play_game(&mut self, rt: &Runtime, start: u32) -> io::Result<u32> {
-        use futures::stream::{Iter, StreamExt};
-        use sc2_api::{
-            response::Response::Observation as Obs, Request, RequestObservation as ReqObs,
-            ResponseObservation as RespObs, Status,
-        };
-        use std::sync::mpsc::{self, TryIter};
-        use tokio::sync::watch;
-
-        enum MachineStatus {
-            Empty,
-            Full(sc2_api::response::Response),
-        }
-
-        let mut count = start;
-        let mut conn = self.get_stream()?;
-        let mut agent = self.get_agent()?;
-
-        rt.block_on(async move {
-            let (mut tx, rx) = watch::channel(MachineStatus::Empty);
-            let (sender, receiver) = mpsc::channel();
-            let mut receiver: Iter<TryIter<sc2_api::request::Request>> =
-                tokio::stream::iter(receiver.try_iter());
-
-            // Agent side
-            rt.spawn({
-                let client = sender.clone();
-                let mut rx = rx.clone();
-                async move {
-                    while let Some(watched) = rx.recv_ref().await {
-                        let response = match *watched {
-                            MachineStatus::Full(ref resp) => resp,
-                            _ => continue,
-                        };
-                        if let Obs(RespObs {
-                            observation: Some(observation),
-                            ..
-                        }) = response
-                        {
-                            if let Some(request) = agent.on_step(observation) {
-                                if client.send(request.into()).is_err() {
-                                    break;
-                                }
-                            };
-                        };
-                    }
-                }
-            });
-
-            // Observation requests producer
-            rt.spawn({
-                let mut rx = rx.clone();
-                async move {
-                    while let Some(_) = rx.recv_ref().await {
-                        let req = ReqObs::nofog(count);
-                        if sender.send(req.into()).is_err() {
-                            break;
-                        };
-                    }
-                }
-            });
-
-            loop {
-                let request = match receiver.next().await {
-                    Some(req) => req,
-                    None => continue,
-                };
-                count += 1;
-
-                let response = async {
-                    let r =
-                        requests::with_filter_response(&mut conn, Request::with_id(request, count))
-                            .await
-                            .map_err(|err| err);
-                    if r.is_err() {
-                        tx.closed().await;
-                    }
-                    r
-                };
-
-                let sc2_api::Response {
-                    response, status, ..
-                } = response.await?;
-
-                if validate_status!(status => Status::Ended).is_ok() {
-                    tx.closed().await;
-                    break;
-                };
-                match response {
-                    Some(resp) => tx.broadcast(MachineStatus::Full(resp)),
-                    None => tx.broadcast(MachineStatus::Empty),
-                }
-                .map_err(|_| {
-                    io::Error::new(io::ErrorKind::BrokenPipe, "responses channel closed")
-                })?;
-            }
-            Ok(count)
-        })
-    }
-}
-
-mod requests {
-    use std::io;
-
-    use futures::{
-        future::{ready, Ready},
-        sink::SinkExt,
-        stream::{Stream, StreamExt},
-    };
-    use rsc2_pb::{codec::SC2ProtobufClient, sc2_api};
-
-    pub(crate) async fn with_response(
+    pub(super) async fn filter_response(
         conn: &mut SC2ProtobufClient,
-        request: sc2_api::Request,
-    ) -> io::Result<sc2_api::Response> {
-        conn.send(request).await?;
-        conn.next().await.ok_or(io::Error::new(
-            io::ErrorKind::ConnectionAborted,
-            "No response for request",
-        ))?
-    }
-
-    pub(crate) async fn with_filter_response(
-        conn: &mut SC2ProtobufClient,
-        request: sc2_api::Request,
-    ) -> io::Result<sc2_api::Response> {
+        request: Request,
+    ) -> io::Result<Response> {
         let id = request.id;
         let mut conn = conn.filter(|resp| id_filter(resp, id));
         conn.send(request).await?;
@@ -387,216 +337,33 @@ mod requests {
     fn id_filter(resp: &<SC2ProtobufClient as Stream>::Item, id: Option<u32>) -> Ready<bool> {
         ready(resp.as_ref().ok().filter(|r| r.id == id).is_some())
     }
-}
 
-/*
-#[cfg(test)]
-mod coordinator_states {
-    use super::*;
-    use rsc2_pb::{prelude::*, sc2_api};
-    use std::io;
-    use Commands::*;
-
-    #[allow(non_snake_case)]
-    fn REQUESTJOINGAME() -> sc2_api::RequestJoinGame {
-        sc2_api::RequestJoinGame::default_config()
-    }
-    #[allow(non_snake_case)]
-    fn REQUESTCREATEGAME() -> sc2_api::RequestCreateGame {
-        sc2_api::RequestCreateGame::default_config()
-    }
-    #[allow(non_snake_case)]
-    fn REQUESTSTARTREPLAY() -> sc2_api::RequestStartReplay {
-        sc2_api::RequestStartReplay::from_file("")
-    }
-
-    impl Coordinator {
-        fn mock_run<Iter, Item>(&mut self, elements: Iter) -> io::Result<()>
-        where
-            Iter: IntoIterator<Item = Item>,
-            Item: Into<Commands>,
-        {
-            for element in elements.into_iter().map(|el| el.into()).into_iter() {
-                self.validate(&element)?;
-                match element {
-                    Commands::Launched { .. } => self.sm.launched(),
-                    Commands::CreateGame { .. } => self.sm.initgame(),
-                    Commands::JoinGame { .. } => {
-                        self.sm.ingame();
-                        self.sm.ended();
-                    }
-                    Commands::StartReplay { .. } => {
-                        self.sm.inreplay();
-                        self.sm.ended();
-                    }
-                    Commands::RestartGame { .. } => {
-                        self.sm.ingame();
-                        self.sm.ended();
-                    }
-                    Commands::LeaveGame { .. } => {
-                        self.sm.reset();
-                        self.sm.launched();
-                    }
-                    Commands::QuitGame { .. } => self.sm.reset(),
+    pub(super) async fn agent_client<T>(
+        mut agent: T,
+        client: mpsc::Sender<rRequest>,
+        mut value: watch::Receiver<MachineStatus>,
+        retagent: oneshot::Sender<T>,
+    ) where
+        T: AgentHook,
+    {
+        if let Some(request) = agent.on_start_hook() {
+            if client.send(request.into()).is_err() {
+                let _ = retagent.send(agent);
+                return;
+            }
+        }
+        while let Some(watched) = value.recv_ref().await {
+            let response = match *watched {
+                MachineStatus::Full(ref resp) => resp,
+                _ => continue,
+            };
+            if let Some(request) = agent.on_step_hook(response) {
+                if client.send(request.into()).is_err() {
+                    break;
                 }
             }
-            Ok(())
         }
+        agent.on_close_hook();
+        let _ = retagent.send(agent);
     }
-
-    #[test]
-    fn create() -> io::Result<()> {
-        let mut c = Coordinator::new();
-        c.sm.launched(); // Mock the launching of the game
-        c.mock_run(&[
-            CreateGame {
-                request: REQUESTCREATEGAME(),
-            },
-            JoinGame {
-                request: REQUESTJOINGAME(),
-            },
-            LeaveGame {},
-        ])
-    }
-
-    #[test]
-    fn two_games() -> io::Result<()> {
-        let mut c = Coordinator::new();
-        c.sm.launched();
-        c.mock_run(&[
-            CreateGame {
-                request: REQUESTCREATEGAME(),
-            },
-            JoinGame {
-                request: REQUESTJOINGAME(),
-            },
-            LeaveGame {},
-            CreateGame {
-                request: REQUESTCREATEGAME(),
-            },
-            JoinGame {
-                request: REQUESTJOINGAME(),
-            },
-            RestartGame {},
-            LeaveGame {},
-        ])
-    }
-
-    #[test]
-    fn join() -> io::Result<()> {
-        let mut c = Coordinator::new();
-        c.sm.launched();
-        c.mock_run(&[
-            JoinGame {
-                request: REQUESTJOINGAME(),
-            },
-            LeaveGame {},
-        ])
-    }
-
-    #[test]
-    fn restart() -> io::Result<()> {
-        let mut c = Coordinator::new();
-        c.sm.launched();
-        c.mock_run(&[
-            CreateGame {
-                request: REQUESTCREATEGAME(),
-            },
-            JoinGame {
-                request: REQUESTJOINGAME(),
-            },
-            RestartGame {},
-        ])
-    }
-
-    #[test]
-    fn replay() -> io::Result<()> {
-        let mut c = Coordinator::new();
-        c.sm.launched();
-        c.mock_run(&[
-            StartReplay {
-                request: REQUESTSTARTREPLAY(),
-            },
-            LeaveGame {},
-        ])
-    }
-
-    #[test]
-    #[should_panic]
-    fn create_twice() {
-        let mut c = Coordinator::new();
-        c.sm.launched();
-        c.mock_run(&[
-            CreateGame {
-                request: REQUESTCREATEGAME(),
-            },
-            CreateGame {
-                request: REQUESTCREATEGAME(),
-            },
-        ])
-        .unwrap()
-    }
-
-    #[test]
-    #[should_panic]
-    fn join_then_create() {
-        let mut c = Coordinator::new();
-        c.sm.launched();
-        c.mock_run(&[
-            JoinGame {
-                request: REQUESTJOINGAME(),
-            },
-            CreateGame {
-                request: REQUESTCREATEGAME(),
-            },
-        ])
-        .unwrap()
-    }
-
-    #[test]
-    #[should_panic]
-    fn create_and_replay_twice() {
-        let mut c = Coordinator::new();
-        c.sm.launched();
-        c.mock_run(&[
-            CreateGame {
-                request: REQUESTCREATEGAME(),
-            },
-            StartReplay {
-                request: REQUESTSTARTREPLAY(),
-            },
-        ])
-        .unwrap()
-    }
-
-    #[test]
-    #[should_panic]
-    fn restart_after_quit() {
-        let mut c = Coordinator::new();
-        c.sm.launched();
-        c.mock_run(&[
-            CreateGame {
-                request: REQUESTCREATEGAME(),
-            },
-            JoinGame {
-                request: REQUESTJOINGAME(),
-            },
-            LeaveGame {},
-            RestartGame {},
-        ])
-        .unwrap()
-    }
-    #[test]
-    #[should_panic]
-    fn replay_restart() {
-        let mut c = Coordinator::new();
-        c.sm.launched();
-        c.mock_run(&[
-            StartReplay {
-                request: REQUESTSTARTREPLAY(),
-            },
-            RestartGame {},
-        ])
-        .unwrap()
-    }
-} */
+}
