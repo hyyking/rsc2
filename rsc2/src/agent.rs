@@ -2,15 +2,14 @@ use rsc2_pb::sc2_api::{request::Request as rRequest, RequestAction, RequestGameI
 use rsc2_pb::sc2_api::{
     response::Response as rResponse, Response, ResponseGameInfo, ResponseObservation,
 };
-use std::marker::Unpin;
 
-pub trait AgentHook: Send + Sync + Unpin {
+pub trait AgentHook: Send {
     fn on_start_hook(&mut self) -> Option<rRequest>;
     fn on_step_hook(&mut self, response: &Response) -> Option<rRequest>;
     fn on_close_hook(&mut self);
 }
 
-pub trait Agent: Send + Sync + Unpin {
+pub trait Agent: Send {
     fn on_step(&mut self, info: &ResponseObservation) -> Option<RequestAction>;
 
     fn on_start(&mut self, _info: &ResponseGameInfo) -> Option<RequestAction> {
@@ -39,7 +38,7 @@ where
     }
 }
 
-pub trait RawAgent: Send + Sync + Unpin {
+pub trait RawAgent: Send {
     fn on_response(&mut self, response: &Response) -> Option<rRequest>;
 }
 

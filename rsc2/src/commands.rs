@@ -1,13 +1,16 @@
 use crate::agent;
 use rsc2_pb::sc2_api;
+use std::net::SocketAddrV4;
 
 #[derive(Clone)]
 pub enum Commands<T>
 where
-    T: agent::Agent,
+    T: agent::AgentHook,
 {
     /// Game has already been launched
-    Launched {},
+    Launched {
+        socket: SocketAddrV4,
+    },
     /// Create a new game
     CreateGame {
         request: sc2_api::RequestCreateGame,
@@ -31,7 +34,7 @@ where
 
 impl<T> From<&Commands<T>> for Commands<T>
 where
-    T: Clone + agent::Agent,
+    T: Clone + agent::AgentHook,
 {
     fn from(other: &Self) -> Self {
         other.clone()
