@@ -6,6 +6,6 @@ edition = "2018"
 
 [dependencies]
 rsc2_pb = {path="../rsc2-pb", features=["codec"]}
-tokio = "0.2.0-alpha.6"
+tokio = {version = "0.2.0-alpha.6", features=["rt-full"]}
 websocket-lite = "0.3.1-alpha.6"
 futures-preview = "0.3.0-alpha.19"
