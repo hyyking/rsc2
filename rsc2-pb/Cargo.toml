@@ -19,4 +19,3 @@ tokio-net = {version="0.2.0-alpha.6", optional=true}
 
 [build-dependencies]
 prost-build = {git = "https://github.com/hyyking/prost.git"}
-
