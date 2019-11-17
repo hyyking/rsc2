@@ -1,11 +1,14 @@
 use crate::agent;
 use rsc2_pb::sc2_api;
+use sc2_api::request::Request as rRequest;
+use std::marker::Unpin;
 use std::net::SocketAddrV4;
 
 #[derive(Clone)]
-pub enum Commands<T>
+pub enum Commands<A, P>
 where
-    T: agent::AgentHook,
+    A: agent::AgentHook,
+    P: Iterator<Item = rRequest> + Unpin,
 {
     /// Game has already been launched
     Launched {
@@ -17,12 +20,14 @@ where
     },
     /// Join an existing game
     JoinGame {
-        agent: T,
+        agent: A,
+        producer: P,
         request: sc2_api::RequestJoinGame,
     },
     /// Start a replay
     StartReplay {
-        agent: T,
+        agent: A,
+        producer: P,
         request: sc2_api::RequestStartReplay,
     },
     /// Restart a game
@@ -32,9 +37,10 @@ where
     QuitGame {},
 }
 
-impl<T> From<&Commands<T>> for Commands<T>
+impl<A, P> From<&Commands<A, P>> for Commands<A, P>
 where
-    T: Clone + agent::AgentHook,
+    A: Clone + agent::AgentHook,
+    P: Clone + Iterator<Item = rRequest> + Unpin,
 {
     fn from(other: &Self) -> Self {
         other.clone()

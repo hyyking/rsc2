@@ -6,7 +6,11 @@ use rsc2::{pb_prelude::*, sc2_api};
 struct Bot;
 
 impl Agent for Bot {
-    fn on_step(&mut self, _obs: &sc2_api::ResponseObservation) -> Option<sc2_api::RequestAction> {
+    fn on_start(&mut self, _: &sc2_api::ResponseGameInfo) -> Option<sc2_api::RequestAction> {
+        None
+    }
+
+    fn on_step(&mut self, _: &sc2_api::ResponseObservation) -> Option<sc2_api::RequestAction> {
         let actions = vec![sc2_api::Action {
             action_raw: None,
             action_feature_layer: None,

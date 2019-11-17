@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod producer;
 
 mod commands;
 pub use crate::commands::*;
@@ -10,14 +11,14 @@ pub use rsc2_pb::prelude as pb_prelude;
 pub use rsc2_pb::sc2_api;
 
 pub mod builder {
-    use super::{agent, Commands};
+    use super::{agent, producer, Commands};
     use rsc2_pb::sc2_api;
 
-    pub struct RawRequestGame<T>
+    pub struct RawRequestGame<A>
     where
-        T: agent::AgentHook,
+        A: agent::AgentHook + 'static,
     {
-        messages: Vec<Commands<T>>,
+        messages: Vec<Commands<A, producer::RawProducer>>,
     }
     impl<T> RawRequestGame<T>
     where
@@ -35,6 +36,7 @@ pub mod builder {
             messages.push(Commands::CreateGame { request: create });
             messages.push(Commands::JoinGame {
                 request: join,
+                producer: producer::RawProducer::new(),
                 agent,
             });
             messages.push(Commands::LeaveGame {});
@@ -46,7 +48,7 @@ pub mod builder {
     where
         T: agent::AgentHook,
     {
-        type Item = Commands<T>;
+        type Item = Commands<T, producer::RawProducer>;
         type IntoIter = std::vec::IntoIter<Self::Item>;
 
         fn into_iter(self) -> Self::IntoIter {
