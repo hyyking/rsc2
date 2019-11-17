@@ -20,7 +20,10 @@ macro_rules! validate_status {
         let _: ::rsc2_pb::sc2_api::Status = $variant;
         status
             .ok_or_else(|| {
-                ::std::io::Error::new(io::ErrorKind::ConnectionAborted, "Missing Status Code")
+                ::std::io::Error::new(
+                    ::std::io::ErrorKind::ConnectionAborted,
+                    "Missing Status Code",
+                )
             })
             .and_then(
                 |status| match ::rsc2_pb::sc2_api::Status::try_from(status).ok() {
