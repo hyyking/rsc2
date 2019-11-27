@@ -1,7 +1,7 @@
 use rsc2::api::raw::{NewRawAgent, RawAgent, RawRequestGame};
 use rsc2::hook::NextRequest;
 use rsc2::pb::{api, prelude::*};
-use rsc2::Coordinator;
+use rsc2::runtime::Coordinator;
 
 struct Bot;
 

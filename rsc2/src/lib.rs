@@ -3,11 +3,7 @@
 pub mod api;
 pub mod hook;
 
-mod commands;
-pub use crate::commands::Commands;
-
-mod coordinator;
-pub use coordinator::Coordinator;
+pub mod runtime;
 
 pub mod pb {
     pub use rsc2_pb::api;
