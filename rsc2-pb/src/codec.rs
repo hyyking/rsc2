@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::sc2_api;
+use crate::api;
 
 use bytes::BytesMut;
 use prost::Message;
@@ -26,11 +26,11 @@ impl From<MessageCodec> for SC2ProtobufCodec {
 }
 
 impl Decoder for SC2ProtobufCodec {
-    type Item = sc2_api::Response;
+    type Item = api::Response;
     type Error = io::Error;
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         match self.inner.decode(src) {
-            Ok(Some(message)) => Ok(Some(sc2_api::Response::decode(message.into_data())?)),
+            Ok(Some(message)) => Ok(Some(api::Response::decode(message.into_data())?)),
             Ok(None) => Ok(None),
             Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         }
@@ -38,11 +38,11 @@ impl Decoder for SC2ProtobufCodec {
 }
 
 impl Encoder for SC2ProtobufCodec {
-    type Item = sc2_api::Request;
+    type Item = api::Request;
     type Error = io::Error;
 
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        let mut buffer = vec![];
+        let mut buffer = Vec::with_capacity(2 * 1024);
         item.encode(&mut buffer)?;
         match self.inner.encode(WSMessage::binary(buffer), dst) {
             Ok(()) => Ok(()),

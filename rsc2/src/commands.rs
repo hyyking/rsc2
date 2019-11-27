@@ -1,46 +1,37 @@
-use crate::agent;
-use rsc2_pb::sc2_api;
-use sc2_api::request::Request as rRequest;
-use std::marker::Unpin;
+use crate::hook;
+use rsc2_pb::api as pb;
 use std::net::SocketAddrV4;
 
 #[derive(Clone)]
-pub enum Commands<A, P>
+pub enum Commands<A>
 where
-    A: agent::AgentHook,
-    P: Iterator<Item = rRequest> + Unpin,
+    A: hook::AgentHook,
 {
     /// Game has already been launched
-    Launched {
-        socket: SocketAddrV4,
-    },
+    Launched { socket: SocketAddrV4 },
     /// Create a new game
-    CreateGame {
-        request: sc2_api::RequestCreateGame,
-    },
+    CreateGame { request: pb::RequestCreateGame },
     /// Join an existing game
     JoinGame {
         agent: A,
-        producer: P,
-        request: sc2_api::RequestJoinGame,
+        request: pb::RequestJoinGame,
     },
     /// Start a replay
     StartReplay {
         agent: A,
-        producer: P,
-        request: sc2_api::RequestStartReplay,
+        request: pb::RequestStartReplay,
     },
     /// Restart a game
-    RestartGame {},
+    RestartGame,
     /// Leave the game but keep the instance running
-    LeaveGame {},
-    QuitGame {},
+    LeaveGame,
+    /// Quit the running instance of the game
+    QuitGame,
 }
 
-impl<A, P> From<&Commands<A, P>> for Commands<A, P>
+impl<A> From<&Commands<A>> for Commands<A>
 where
-    A: Clone + agent::AgentHook,
-    P: Clone + Iterator<Item = rRequest> + Unpin,
+    A: Clone + hook::AgentHook,
 {
     fn from(other: &Self) -> Self {
         other.clone()

@@ -1,28 +1,26 @@
-use rsc2::agent::{Agent, NewAgent};
-use rsc2::builder::RawRequestGame;
+use rsc2::api::raw::{NewRawAgent, RawAgent, RawRequestGame};
+use rsc2::hook::NextRequest;
+use rsc2::pb::{api, prelude::*};
 use rsc2::Coordinator;
-use rsc2::{pb_prelude::*, sc2_api};
 
 struct Bot;
 
-impl Agent for Bot {
-    fn on_start(&mut self, _: &sc2_api::ResponseGameInfo) -> Option<sc2_api::RequestAction> {
-        None
-    }
-
-    fn on_step(&mut self, _: &sc2_api::ResponseObservation) -> Option<sc2_api::RequestAction> {
-        let actions = vec![sc2_api::Action {
+impl RawAgent for Bot {
+    fn on_response(&mut self, _: api::Response) -> NextRequest {
+        let actions = vec![api::Action {
             action_raw: None,
             action_feature_layer: None,
             action_render: None,
             action_ui: None,
-            action_chat: Some(sc2_api::ActionChat {
+            action_chat: Some(api::ActionChat {
                 channel: Some(1),
                 message: Some("Hello World".into()),
             }),
             game_loop: None,
         }];
-        Some(sc2_api::RequestAction { actions })
+        NextRequest::Agent(api::request::Request::Action(api::RequestAction {
+            actions,
+        }))
     }
 }
 
@@ -31,9 +29,9 @@ fn main() -> std::io::Result<()> {
 
     let c = Coordinator::new();
     let requests = c.run(RawRequestGame::new(
-        NewAgent(Bot {}),
-        sc2_api::RequestCreateGame::default_config(),
-        sc2_api::RequestJoinGame::default_config(),
+        NewRawAgent(Bot {}),
+        api::RequestCreateGame::default_config(),
+        api::RequestJoinGame::default_config(),
     ))?;
     println!("requests {:?}", requests);
     Ok(())

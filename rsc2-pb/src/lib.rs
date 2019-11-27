@@ -5,7 +5,7 @@ pub mod codec;
 
 pub mod prelude;
 
-pub mod sc2_api {
+pub mod api {
     include!(concat!(
         env!("OUT_DIR", "Couldn't find the generated rust-protobuf code"),
         "/sc2api_protocol.rs"
@@ -17,7 +17,7 @@ macro_rules! validate_status {
     ($status:expr => $variant:path) => {{
         use ::core::convert::TryFrom;
         let status: ::core::option::Option<i32> = $status;
-        let _: ::rsc2_pb::sc2_api::Status = $variant;
+        let _: ::rsc2_pb::api::Status = $variant;
         status
             .ok_or_else(|| {
                 ::std::io::Error::new(
@@ -26,8 +26,8 @@ macro_rules! validate_status {
                 )
             })
             .and_then(
-                |status| match ::rsc2_pb::sc2_api::Status::try_from(status).ok() {
-                    Some($variant) => Ok(()),
+                |status| match ::rsc2_pb::api::Status::try_from(status).ok() {
+                    Some($variant) => Ok($variant),
                     Some(e) => Err(::std::io::Error::new(
                         ::std::io::ErrorKind::ConnectionAborted,
                         format!(r#"Unexpected "{:?}""#, e),

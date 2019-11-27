@@ -1,20 +1,19 @@
-use std::cell::Cell;
-use std::io;
+use std::{
+    cell::Cell,
+    io,
+    sync::{
+        atomic::{AtomicBool, AtomicU32, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
-use crate::agent;
-use crate::producer;
+use crate::hook::{AgentHook, NextRequest};
 use crate::Commands;
 
-use futures::stream::StreamExt;
-use rsc2_pb::{
-    codec::SC2ProtobufClient,
-    sc2_api::{
-        request::Request as rRequest, Request, RequestLeaveGame, RequestQuit, RequestRestartGame,
-        Response, Status,
-    },
-    validate_status,
-};
-use tokio::runtime::Runtime;
+use futures::{lock::Mutex, FutureExt, SinkExt, StreamExt};
+use rsc2_pb::{api as pb, codec::SC2ProtobufClient, validate_status};
+use tokio::{runtime::Runtime, timer::Interval};
 
 macro_rules! bit_flag {
     ($set_f:ident as $val:literal; $check_f:ident) => {
@@ -28,6 +27,11 @@ macro_rules! bit_flag {
             self.0.set(old | 2u8.pow(val));
         }
     };
+}
+macro_rules! arc_mutex {
+    ($var: ident) => {{
+        Arc::new(Mutex::new($var))
+    }};
 }
 
 struct StateMachine(Cell<u8>);
@@ -46,43 +50,56 @@ impl StateMachine {
     bit_flag!(ended as 4; is_ended);
 }
 
-pub struct Coordinator<A, P>
-where
-    A: agent::AgentHook + 'static,
-    P: Iterator<Item = rRequest> + Unpin,
-{
-    sm: StateMachine,
-    conn: Cell<Option<SC2ProtobufClient>>,
-    agent: Cell<Option<A>>,
-    producer: Cell<Option<P>>,
+struct CoordinatorConfig {
+    interval: Duration,
+    core_threads: usize,
+}
+impl Default for CoordinatorConfig {
+    fn default() -> Self {
+        Self {
+            interval: Duration::from_millis(50),
+            core_threads: 4,
+        }
+    }
 }
 
-impl<A, P> Coordinator<A, P>
+pub struct Coordinator<A>
 where
-    A: agent::AgentHook + 'static,
-    P: Iterator<Item = rRequest> + Unpin,
+    A: AgentHook + 'static,
+{
+    sm: StateMachine,
+    config: CoordinatorConfig,
+
+    conn: Cell<Option<SC2ProtobufClient>>,
+    agent: Cell<Option<A>>,
+}
+
+impl<A> Coordinator<A>
+where
+    A: AgentHook + 'static,
 {
     pub fn new() -> Self {
         Self {
             sm: StateMachine::new(),
-            conn: Cell::new(None),
-            agent: Cell::new(None),
-            producer: Cell::new(None),
+            config: CoordinatorConfig::default(),
+
+            conn: Cell::default(),
+            agent: Cell::default(),
         }
     }
 
     pub fn run<Iter, Item>(&self, elements: Iter) -> io::Result<u32>
     where
-        Item: Into<Commands<A, P>>,
+        Item: Into<Commands<A>>,
         Iter: IntoIterator<Item = Item>,
     {
         let mut request_count: u32 = 0;
         let rt = tokio::runtime::Builder::new()
-            .core_threads(4)
-            .build()
-            .unwrap();
+            .core_threads(self.config.core_threads)
+            .name_prefix("rsc2-coordinator-thread")
+            .build()?;
 
-        for element in elements.into_iter().map(|el| el.into()).into_iter() {
+        for element in elements.into_iter().map(|el| el.into()) {
             request_count += 1;
             self.validate(&element)?;
             match element {
@@ -95,71 +112,65 @@ where
                 Commands::CreateGame { request } => {
                     log::debug!("Commands::CreateGame");
                     let response =
-                        self.send_request(&rt, Request::with_id(request, request_count))?;
-                    validate_status!(response.status => Status::InitGame)?;
+                        self.send_request(&rt, pb::Request::with_id(request, request_count))?;
+                    validate_status!(response.status => pb::Status::InitGame)?;
 
                     self.sm.initgame()
                 }
-                Commands::JoinGame {
-                    request,
-                    agent,
-                    producer,
-                } => {
+                Commands::JoinGame { request, agent } => {
                     log::debug!("Commands::JoinGame");
                     self.agent.set(Some(agent));
-                    self.producer.set(Some(producer));
 
                     let response =
-                        self.send_request(&rt, Request::with_id(request, request_count))?;
-                    validate_status!(response.status => Status::InGame)?;
+                        self.send_request(&rt, pb::Request::with_id(request, request_count))?;
+                    validate_status!(response.status => pb::Status::InGame)?;
 
                     self.sm.ingame();
-                    self.play_game(&rt, request_count)?;
+                    request_count = self.play_game(&rt, request_count)?;
                     self.sm.ended();
                 }
-                Commands::StartReplay {
-                    request,
-                    agent,
-                    producer,
-                } => {
+                Commands::StartReplay { request, agent } => {
                     log::debug!("Commands::StartReplay");
                     self.agent.set(Some(agent));
-                    self.producer.set(Some(producer));
 
                     let response =
-                        self.send_request(&rt, Request::with_id(request, request_count))?;
-                    validate_status!(response.status => Status::InReplay)?;
+                        self.send_request(&rt, pb::Request::with_id(request, request_count))?;
+                    validate_status!(response.status => pb::Status::InReplay)?;
 
                     self.sm.inreplay();
-                    self.play_game(&rt, request_count)?;
+                    request_count = self.play_game(&rt, request_count)?;
                     self.sm.ended();
                 }
-                Commands::RestartGame { .. } => {
+                Commands::RestartGame => {
                     log::debug!("Commands::RestartGame");
                     let response = self.send_request(
                         &rt,
-                        Request::with_id(RequestRestartGame {}, request_count),
+                        pb::Request::with_id(pb::RequestRestartGame {}, request_count),
                     )?;
-                    validate_status!(response.status => Status::InGame)?;
+                    validate_status!(response.status => pb::Status::InGame)?;
 
                     self.sm.ingame();
-                    self.play_game(&rt, request_count)?;
+                    request_count = self.play_game(&rt, request_count)?;
                     self.sm.ended();
                 }
-                Commands::LeaveGame { .. } => {
+                Commands::LeaveGame => {
                     log::debug!("Commands::LeaveGame");
-                    let response = self
-                        .send_request(&rt, Request::with_id(RequestLeaveGame {}, request_count))?;
-                    validate_status!(response.status => Status::Launched)?;
+                    let response = self.send_request(
+                        &rt,
+                        pb::Request::with_id(pb::RequestLeaveGame {}, request_count),
+                    )?;
+                    validate_status!(response.status => pb::Status::Launched)?;
 
                     self.sm.reset();
                     self.sm.launched();
                 }
-                Commands::QuitGame { .. } => {
+                Commands::QuitGame => {
                     log::debug!("Commands::QuitGame");
-                    let response =
-                        self.send_request(&rt, Request::with_id(RequestQuit {}, request_count))?;
-                    validate_status!(response.status => Status::Quit)?;
+                    let response = self.send_request(
+                        &rt,
+                        pb::Request::with_id(pb::RequestQuit {}, request_count),
+                    )?;
+                    validate_status!(response.status => pb::Status::Quit)?;
 
                     self.sm.reset();
                 }
@@ -169,7 +180,7 @@ where
         Ok(request_count)
     }
     /// {{{
-    fn validate(&self, command: &Commands<A, P>) -> io::Result<()> {
+    fn validate(&self, command: &Commands<A>) -> io::Result<()> {
         let fast_err = |message: &'static str| -> io::Result<()> {
             Err(io::Error::new(io::ErrorKind::InvalidInput, message))
         };
@@ -206,100 +217,198 @@ where
                     return fast_err("Cannot play a replay while a game is running");
                 }
             }
-            Commands::RestartGame { .. } => {
+            Commands::RestartGame => {
+                is_launched()?;
                 if !self.sm.is_ended() || !self.sm.is_ingame() {
                     return fast_err("Cannot restart a game while one is running");
                 }
             }
-            Commands::LeaveGame { .. } => {
+            Commands::LeaveGame => {
+                is_launched()?;
                 if !self.sm.is_ended() {
                     return fast_err("Cannot leave a game while one is running");
                 }
             }
-            Commands::QuitGame { .. } => {}
+            Commands::QuitGame => {
+                is_launched()?;
+            }
         }
         Ok(())
     }
     /// }}}
 
-    fn get_stream(&self) -> io::Result<SC2ProtobufClient> {
-        self.conn.take().ok_or(io::Error::new(
-            io::ErrorKind::NotConnected,
-            "Engine is not connected to a SC2 instance",
-        ))
-    }
-
-    fn get_agent(&self) -> io::Result<A> {
-        self.agent.take().ok_or(io::Error::new(
-            io::ErrorKind::NotFound,
-            "Engine has no agent to run",
-        ))
-    }
-
-    fn get_producer(&self) -> io::Result<P> {
-        self.producer.take().ok_or(io::Error::new(
-            io::ErrorKind::NotFound,
-            "Engine has no producer to run",
-        ))
-    }
-
-    fn send_request(&self, rt: &Runtime, request: Request) -> io::Result<Response> {
+    fn send_request(&self, rt: &Runtime, request: pb::Request) -> io::Result<pb::Response> {
         log::trace!("send_request");
-        let mut conn = self.get_stream()?;
+        let mut conn = self.get_ressource(false, true).1.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotConnected,
+                "Engine is not connected to a SC2 instance",
+            )
+        })?;
         let response = rt.block_on(requests::filter_response(&mut conn, request))?;
-        self.conn.set(Some(conn));
+        self.reset_ressource(None, Some(conn));
         Ok(response)
     }
 
-    fn play_game(&self, rt: &Runtime, count: u32) -> io::Result<()> {
-        use crate::agent::NextRequest;
-        use futures::sink::SinkExt;
+    fn play_game(&self, rt: &Runtime, count: u32) -> io::Result<u32> {
+        let (agent, ss) = self.get_ressource(true, true);
 
-        let (mut sink, mut stream) = self.get_stream()?.split();
-        let mut agent = self.get_agent()?;
-        let mut producer = self.get_producer()?;
+        let (sink, stream) = ss
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "Engine is not connected to a SC2 instance",
+                )
+            })?
+            .split();
+        let agent = agent
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Engine has no agent to run"))?;
 
-        let start_hook = match agent.on_start_hook() {
-            NextRequest::Agent(req) => req,
-            NextRequest::Observation => producer.next().unwrap(),
-        };
+        let producer = A::build_producer();
+        let mut timer = Interval::new_interval(self.config.interval);
 
-        let astream = producer::StreamAgent::new(&mut agent, &mut producer, &mut stream);
-        let msink = std::sync::Arc::new(tokio::sync::Mutex::new(&mut sink));
-        rt.block_on({
-            let msink = std::sync::Arc::clone(&msink);
+        let msink = arc_mutex!(sink);
+        let mstream = arc_mutex!(stream);
+        let magent = arc_mutex!(agent);
+        let mprod = arc_mutex!(producer);
+        let count = Arc::new(AtomicU32::new(count));
+
+        let __: Result<(), io::Error> = rt.block_on({
+            let stream = Arc::clone(&mstream);
+            let agent = Arc::clone(&magent);
+            let sink = Arc::clone(&msink);
+            let prod = Arc::clone(&mprod);
+            let count = Arc::clone(&count);
+
             async move {
-                msink
-                    .lock()
-                    .await
-                    .send(Request::with_id(start_hook, count + 1))
-                    .await
-            }
-        })?;
-
-        rt.block_on(astream.enumerate().for_each_concurrent(8, |(id, request)| {
-            let msink = std::sync::Arc::clone(&msink);
-            async move {
-                log::trace!("sending response");
-                match msink
-                    .lock()
-                    .await
-                    .send(Request::with_id(request, id as u32))
-                    .await
-                {
-                    Ok(()) => {}
-                    Err(e) => log::error!("{:?}", e),
+                let start_hook = match agent.lock().await.on_start_hook() {
+                    NextRequest::Agent(req) => req,
+                    NextRequest::Observation => prod.lock().await.next().unwrap(),
                 };
+                sink.lock()
+                    .await
+                    .send(pb::Request::with_id(
+                        start_hook,
+                        count.fetch_add(1, Ordering::Acquire) + 1,
+                    ))
+                    .await?;
+
+                let ended = Arc::new(AtomicBool::default());
+                while let Some(_) = timer.next().await {
+                    if ended.load(Ordering::Acquire) {
+                        break;
+                    }
+
+                    let (stream_remote, stream_handle) = {
+                        let stream = Arc::clone(&stream);
+                        let count = Arc::clone(&count);
+                        async move {
+                            let mut stream = stream.lock().await;
+                            log::trace!("receiver loop {}", count.load(Ordering::SeqCst));
+                            let mut conn = stream.by_ref().filter(|resp| {
+                                requests::id_filter(resp, Some(count.load(Ordering::Acquire)))
+                            });
+                            conn.next().await
+                        }
+                    }
+                    .remote_handle();
+
+                    let (agent_remote, agent_handle) = {
+                        let agent = Arc::clone(&agent);
+                        let ended = Arc::clone(&ended);
+                        async move {
+                            match stream_handle.await {
+                                Some(Ok(obs)) => {
+                                    if validate_status!(obs.status => pb::Status::Ended).is_ok() {
+                                        ended.store(true, Ordering::Release);
+                                        return None;
+                                    }
+                                    Some(agent.lock().await.on_step_hook(obs))
+                                }
+                                Some(Err(err)) => {
+                                    log::error!("stream err: {}", err);
+                                    None
+                                }
+                                None => {
+                                    ended.store(true, Ordering::Release);
+                                    return None;
+                                }
+                            }
+                        }
+                    }
+                    .remote_handle();
+
+                    rt.spawn(stream_remote);
+                    rt.spawn(agent_remote);
+                    rt.spawn({
+                        let sink = Arc::clone(&sink);
+                        let prod = Arc::clone(&prod);
+                        let count = Arc::clone(&count);
+                        async move {
+                            let request = match agent_handle.await {
+                                Some(request) => request,
+                                None => return,
+                            };
+                            let request = pb::Request::with_id(
+                                match request {
+                                    NextRequest::Agent(req) => req,
+                                    NextRequest::Observation => prod
+                                        .lock()
+                                        .await
+                                        .next()
+                                        .expect("observation generator ended"),
+                                },
+                                count.fetch_add(1, Ordering::AcqRel) + 1,
+                            );
+                            log::trace!("sender loop {}", count.load(Ordering::SeqCst));
+                            sink.lock().await.send(request).await.expect("response");
+                        }
+                    });
+                }
+                Ok(())
             }
-        }));
+        });
+        __?; // propagate the error of the runtime
+
+        let sink = unwrap_arc(msink)?.into_inner();
+        let stream = unwrap_arc(mstream)?.into_inner();
+        let mut agent = unwrap_arc(magent)?.into_inner();
+
         agent.on_close_hook();
 
-        self.agent.set(Some(agent));
-        self.conn.set(Some(sink.reunite(stream).unwrap()));
-        self.producer.set(Some(producer));
+        self.reset_ressource(Some(agent), sink.reunite(stream).ok());
 
-        Ok(())
+        Ok(unwrap_arc(count)?.into_inner())
     }
+
+    #[inline]
+    fn reset_ressource(&self, agent: Option<A>, conn: Option<SC2ProtobufClient>) {
+        match agent {
+            a @ Some(_) => self.agent.set(a),
+            _ => {}
+        }
+        match conn {
+            c @ Some(_) => self.conn.set(c),
+            _ => {}
+        }
+    }
+
+    #[inline]
+    fn get_ressource(&self, agent: bool, conn: bool) -> (Option<A>, Option<SC2ProtobufClient>) {
+        match (agent, conn) {
+            (true, true) => (self.agent.take(), self.conn.take()),
+            (true, false) => (self.agent.take(), None),
+            (false, true) => (None, self.conn.take()),
+            (false, false) => (None, None),
+        }
+    }
+}
+
+#[inline(always)]
+fn unwrap_arc<T>(am: std::sync::Arc<T>) -> io::Result<T> {
+    while Arc::strong_count(&am) != 1 {}
+    Arc::try_unwrap(am)
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "couldn't unwrap arc ressource"))
 }
 
 mod requests {
@@ -312,14 +421,19 @@ mod requests {
         stream::{Stream, StreamExt},
     };
     use rsc2_pb::{
+        api as pb,
         codec::{from_framed, SC2ProtobufClient},
-        sc2_api::{Request, Response},
     };
     use websocket_lite::ClientBuilder;
 
     pub(super) async fn init_connection(addr: SocketAddrV4) -> io::Result<SC2ProtobufClient> {
-        let builder =
-            ClientBuilder::new(&format!("ws://{}:{}/sc2api", addr.ip(), addr.port())).unwrap();
+        let builder = ClientBuilder::new(&format!("ws://{}:{}/sc2api", addr.ip(), addr.port()))
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Invalid adress ws://{}:{}/sc2api", addr.ip(), addr.ip()),
+                )
+            })?;
         Ok(from_framed(
             builder
                 .async_connect_insecure()
@@ -330,17 +444,21 @@ mod requests {
 
     pub(super) async fn filter_response(
         conn: &mut SC2ProtobufClient,
-        request: Request,
-    ) -> io::Result<Response> {
+        request: pb::Request,
+    ) -> io::Result<pb::Response> {
         let id = request.id;
         let mut conn = conn.filter(|resp| id_filter(resp, id));
         conn.send(request).await?;
-        conn.next().await.ok_or(io::Error::new(
-            io::ErrorKind::ConnectionAborted,
-            "No response for request",
-        ))?
+        conn.next().await.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::ConnectionAborted, "No response for request")
+        })?
     }
-    fn id_filter(resp: &<SC2ProtobufClient as Stream>::Item, id: Option<u32>) -> Ready<bool> {
+
+    #[inline(always)]
+    pub(super) fn id_filter(
+        resp: &<SC2ProtobufClient as Stream>::Item,
+        id: Option<u32>,
+    ) -> Ready<bool> {
         ready(resp.as_ref().ok().filter(|r| r.id == id).is_some())
     }
 }
