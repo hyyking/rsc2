@@ -11,11 +11,14 @@ use websocket_codec::{Message as WSMessage, MessageCodec};
 /// Protobuf and TCP based [`Framed`](tokio::codec::Framed) type
 pub type SC2ProtobufClient = Framed<TcpStream, SC2ProtobufCodec>;
 
+/// wrap a Framed [`TcpStream`](tokio_net::tcp::TcpStream) with a [`MessageCodec`](websocket_codec::MessageCodec) into a [`SC2ProtobufClient`](SC2ProtobufClient)
 pub fn from_framed(old: Framed<TcpStream, MessageCodec>) -> SC2ProtobufClient {
     let parts = old.into_parts();
     Framed::new(parts.io, parts.codec.into())
 }
 
+/// Codec for encoding an decoding websocket protobuf messages
+#[allow(missing_debug_implementations)]
 pub struct SC2ProtobufCodec {
     inner: MessageCodec,
 }
