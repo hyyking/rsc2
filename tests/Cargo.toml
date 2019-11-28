@@ -1,0 +1,19 @@
+[package]
+name = "tests"
+version = "0.0.0"
+authors = ["hyyking <leoduret@outlook.com>"]
+edition = "2018"
+publish = false
+
+[[test]]
+name = "rsc2_derive"
+path = "derive.rs"
+
+[[test]]
+name = "rsc2_runtime"
+path = "runtime.rs"
+
+[dev-dependencies]
+rsc2 = {path = "../rsc2"}
+rsc2_pb = {path = "../rsc2-pb"}
+rsc2_derive = {path = "../rsc2-derive"}

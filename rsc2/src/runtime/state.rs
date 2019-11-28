@@ -40,7 +40,7 @@ impl StateMachine {
             }
             Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "Game has not been launched",
+                "Game has not been flaged as launched (if an instance is running send a Comands::Launched to connect)",
             ))
         };
         match command {
@@ -84,5 +84,55 @@ impl StateMachine {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod set {
+    use super::StateMachine;
+
+    #[test]
+    fn flags() {
+        let sm = StateMachine::default();
+        sm.launched();
+        assert!(sm.is_launched());
+        sm.reset();
+
+        sm.initgame();
+        assert!(sm.is_initgame());
+        sm.reset();
+
+        sm.inreplay();
+        assert!(sm.is_inreplay());
+        sm.reset();
+
+        sm.ingame();
+        assert!(sm.is_ingame());
+        sm.reset();
+
+        sm.ended();
+        assert!(sm.is_ended());
+        sm.reset();
+
+        assert_eq!(sm.0.get(), 0)
+    }
+
+    #[test]
+    fn multiple_flags() {
+        let sm = StateMachine::default();
+
+        sm.launched();
+        sm.initgame();
+        sm.ingame();
+        sm.ended();
+
+        assert!(sm.is_launched());
+        assert!(sm.is_initgame());
+        assert!(sm.is_ingame());
+        assert!(!sm.is_inreplay());
+        assert!(sm.is_ended());
+
+        sm.reset();
+        assert_eq!(sm.0.get(), 0)
     }
 }

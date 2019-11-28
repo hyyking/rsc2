@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::io;
+use std::net::SocketAddrV4;
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
     Arc,
@@ -9,8 +10,13 @@ use crate::hook::{AgentHook, NextRequest};
 use crate::runtime::{builder::CoordinatorConfig, state::StateMachine, Commands};
 
 use futures::{lock::Mutex, FutureExt, SinkExt, StreamExt};
-use rsc2_pb::{api as pb, codec::SC2ProtobufClient, validate_status};
-use tokio::{runtime::Runtime, timer::Interval};
+use rsc2_pb::{
+    api as pb,
+    codec::{from_framed, SC2ProtobufClient},
+    validate_status,
+};
+use tokio::{runtime::TaskExecutor, timer::Interval};
+use websocket_lite::ClientBuilder;
 
 pub struct Coordinator<A> {
     sm: StateMachine,
@@ -32,8 +38,16 @@ impl<A: AgentHook + 'static> Default for Coordinator<A> {
 }
 
 impl<A: AgentHook + 'static> Coordinator<A> {
+    /// Build a new coordinator with default config.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Get a handle to the coordinator's runtime. Tasks spawned will be concurrently run alongside
+    /// the coordinators requests and responses. It is advised to only spawn tasks within your agent.
+    // TODO: Create a handle that can be used to spawn tasks during the game.
+    pub fn executor(&self) -> TaskExecutor {
+        self.config.runtime.executor()
     }
 
     pub fn run<Iter, Item>(&self, elements: Iter) -> io::Result<u32>
@@ -42,10 +56,6 @@ impl<A: AgentHook + 'static> Coordinator<A> {
         Iter: IntoIterator<Item = Item>,
     {
         let mut request_count: u32 = 0;
-        let rt = tokio::runtime::Builder::new()
-            .core_threads(self.config.core_threads)
-            .name_prefix("rsc2-coordinator-worker")
-            .build()?;
 
         for element in elements.into_iter().map(|el| el.into()) {
             request_count += 1;
@@ -53,13 +63,13 @@ impl<A: AgentHook + 'static> Coordinator<A> {
             match element {
                 Commands::Launched { socket, .. } => {
                     log::debug!("Commands::Launched");
-                    self.conn.set(Some(rt.block_on(requests::connect(socket))?));
+                    self.connect(socket)?;
                     self.sm.launched()
                 }
                 Commands::CreateGame { request } => {
                     log::debug!("Commands::CreateGame");
-                    let response =
-                        self.send_request(&rt, pb::Request::with_id(request, request_count))?;
+
+                    let response = self.send(pb::Request::with_id(request, request_count))?;
                     validate_status!(response.status => pb::Status::InitGame)?;
 
                     self.sm.initgame()
@@ -68,44 +78,40 @@ impl<A: AgentHook + 'static> Coordinator<A> {
                     log::debug!("Commands::JoinGame");
                     self.agent.set(Some(agent));
 
-                    let response =
-                        self.send_request(&rt, pb::Request::with_id(request, request_count))?;
+                    let response = self.send(pb::Request::with_id(request, request_count))?;
                     validate_status!(response.status => pb::Status::InGame)?;
 
                     self.sm.ingame();
-                    request_count = self.play_game(&rt, request_count)?;
+                    request_count = self.play_game(request_count)?;
                     self.sm.ended();
                 }
                 Commands::StartReplay { request, agent } => {
                     log::debug!("Commands::StartReplay");
                     self.agent.set(Some(agent));
 
-                    let response =
-                        self.send_request(&rt, pb::Request::with_id(request, request_count))?;
+                    let response = self.send(pb::Request::with_id(request, request_count))?;
                     validate_status!(response.status => pb::Status::InReplay)?;
 
                     self.sm.inreplay();
-                    request_count = self.play_game(&rt, request_count)?;
+                    request_count = self.play_game(request_count)?;
                     self.sm.ended();
                 }
                 Commands::RestartGame => {
                     log::debug!("Commands::RestartGame");
-                    let response = self.send_request(
-                        &rt,
-                        pb::Request::with_id(pb::RequestRestartGame {}, request_count),
-                    )?;
+                    let response = self.send(pb::Request::with_id(
+                        pb::RequestRestartGame {},
+                        request_count,
+                    ))?;
                     validate_status!(response.status => pb::Status::InGame)?;
 
                     self.sm.ingame();
-                    request_count = self.play_game(&rt, request_count)?;
+                    request_count = self.play_game(request_count)?;
                     self.sm.ended();
                 }
                 Commands::LeaveGame => {
                     log::debug!("Commands::LeaveGame");
-                    let response = self.send_request(
-                        &rt,
-                        pb::Request::with_id(pb::RequestLeaveGame {}, request_count),
-                    )?;
+                    let response =
+                        self.send(pb::Request::with_id(pb::RequestLeaveGame {}, request_count))?;
                     validate_status!(response.status => pb::Status::Launched)?;
 
                     self.sm.reset();
@@ -113,40 +119,24 @@ impl<A: AgentHook + 'static> Coordinator<A> {
                 }
                 Commands::QuitGame => {
                     log::debug!("Commands::QuitGame");
-                    let response = self.send_request(
-                        &rt,
-                        pb::Request::with_id(pb::RequestQuit {}, request_count),
-                    )?;
+                    let response =
+                        self.send(pb::Request::with_id(pb::RequestQuit {}, request_count))?;
                     validate_status!(response.status => pb::Status::Quit)?;
 
                     self.sm.reset();
                 }
             }
         }
-        rt.shutdown_now();
         Ok(request_count)
     }
 
-    fn send_request(&self, rt: &Runtime, request: pb::Request) -> io::Result<pb::Response> {
-        log::trace!("send_request");
-        let mut conn = self.get_ressource(false, true).1.ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotConnected,
-                "Engine is not connected to a SC2 instance",
-            )
-        })?;
-        let response = rt.block_on(requests::filter_response(&mut conn, request))?;
-        self.reset_ressource(None, Some(conn));
-        Ok(response)
-    }
-
-    fn play_game(&self, rt: &Runtime, count: u32) -> io::Result<u32> {
+    fn play_game(&self, count: u32) -> io::Result<u32> {
         macro_rules! arc_mutex {
             ($var: ident) => {{
                 Arc::new(Mutex::new($var))
             }};
         }
-
+        let rt = &self.config.runtime;
         let (agent, ss) = self.get_ressource(true, true);
         let (sink, stream) = ss
             .ok_or_else(|| {
@@ -199,7 +189,7 @@ impl<A: AgentHook + 'static> Coordinator<A> {
                         let count = Arc::clone(&count);
                         async move {
                             let mut stream = stream.lock().await;
-                            log::trace!("receiver loop {}", count.load(Ordering::Acquire));
+                            log::trace!("receiver loop: {}", count.load(Ordering::Acquire));
                             let mut conn = stream.by_ref().filter(|resp| {
                                 requests::id_filter(resp, Some(count.load(Ordering::Acquire)))
                             });
@@ -251,7 +241,7 @@ impl<A: AgentHook + 'static> Coordinator<A> {
                                 },
                                 count.fetch_add(1, Ordering::AcqRel) + 1,
                             );
-                            log::trace!("sender loop {}", count.load(Ordering::Acquire));
+                            log::trace!("sender loop: {}", count.load(Ordering::Acquire));
                             sink.lock().await.send(request).await.expect("response");
                         }
                     });
@@ -271,7 +261,44 @@ impl<A: AgentHook + 'static> Coordinator<A> {
 
         Ok(unwrap_arc(count)?.into_inner())
     }
+}
 
+impl<A: AgentHook + 'static> Coordinator<A> {
+    fn connect(&self, addr: SocketAddrV4) -> io::Result<()> {
+        let builder = ClientBuilder::new(&format!("ws://{}:{}/sc2api", addr.ip(), addr.port()))
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Invalid adress ws://{}:{}/sc2api", addr.ip(), addr.ip()),
+                )
+            })?;
+        let framed = self
+            .config
+            .runtime
+            .block_on(builder.async_connect_insecure())
+            .map_err(|e| *e.downcast::<io::Error>().unwrap())?;
+        self.conn.set(Some(from_framed(framed)));
+        Ok(())
+    }
+
+    fn send(&self, request: pb::Request) -> io::Result<pb::Response> {
+        let mut conn = self.get_ressource(false, true).1.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotConnected,
+                "Engine is not connected to a SC2 instance",
+            )
+        })?;
+        let response = self
+            .config
+            .runtime
+            .block_on(requests::filter_response(&mut conn, request))?;
+        self.reset_ressource(None, Some(conn));
+        Ok(response)
+    }
+}
+
+// TODO: Move this to a ressource handler
+impl<A: AgentHook + 'static> Coordinator<A> {
     #[inline]
     fn reset_ressource(&self, agent: Option<A>, conn: Option<SC2ProtobufClient>) {
         match agent {
@@ -286,14 +313,14 @@ impl<A: AgentHook + 'static> Coordinator<A> {
 
     #[inline]
     fn get_ressource(&self, agent: bool, conn: bool) -> (Option<A>, Option<SC2ProtobufClient>) {
-        let mut default = (None, None);
+        let mut ressource = (None, None);
         if agent {
-            default.0 = self.agent.take();
+            ressource.0 = self.agent.take();
         }
         if conn {
-            default.1 = self.conn.take();
+            ressource.1 = self.conn.take();
         }
-        default
+        ressource
     }
 }
 
@@ -315,34 +342,13 @@ fn unwrap_arc<T>(am: std::sync::Arc<T>) -> io::Result<T> {
 
 mod requests {
     use std::io;
-    use std::net::SocketAddrV4;
 
     use futures::{
         future::{ready, Ready},
         sink::SinkExt,
         stream::{Stream, StreamExt},
     };
-    use rsc2_pb::{
-        api as pb,
-        codec::{from_framed, SC2ProtobufClient},
-    };
-    use websocket_lite::ClientBuilder;
-
-    pub(super) async fn connect(addr: SocketAddrV4) -> io::Result<SC2ProtobufClient> {
-        let builder = ClientBuilder::new(&format!("ws://{}:{}/sc2api", addr.ip(), addr.port()))
-            .map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Invalid adress ws://{}:{}/sc2api", addr.ip(), addr.ip()),
-                )
-            })?;
-        Ok(from_framed(
-            builder
-                .async_connect_insecure()
-                .await
-                .map_err(|e| *e.downcast::<io::Error>().unwrap())?,
-        ))
-    }
+    use rsc2_pb::{api as pb, codec::SC2ProtobufClient};
 
     pub(super) async fn filter_response(
         conn: &mut SC2ProtobufClient,

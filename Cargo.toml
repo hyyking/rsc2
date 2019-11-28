@@ -1,2 +1,2 @@
 [workspace]
-members = ["rsc2", "rsc2-pb", "rsc2-derive", "examples"]
+members = ["rsc2", "rsc2-pb", "rsc2-derive", "examples", "tests"]
