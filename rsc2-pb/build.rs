@@ -1,7 +1,7 @@
 const SC2PB: &str = "https://github.com/Blizzard/s2client-proto";
 
-const DERIVE_WRAPENUM: &str = "#[derive(::rsc2_derive::WrapEnum)]";
-const DERIVE_TRYINTOENUM: &str = "#[derive(::rsc2_derive::TryIntoEnum)]";
+const DERIVE_WRAPENUM: &str = "#[derive(::rsc2_macro::WrapEnum)]";
+const DERIVE_TRYINTOENUM: &str = "#[derive(::rsc2_macro::TryIntoEnum)]";
 
 fn main() {
     match git2::Repository::open("./s2client-proto") {

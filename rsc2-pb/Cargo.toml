@@ -6,14 +6,14 @@ edition = "2018"
 build = "build.rs"
 
 [features]
-default = ["rsc2_derive", "prost", "bytes"]
+default = ["rsc2_macro", "prost", "bytes"]
 codec = ["tokio-codec", "tokio-net", "websocket-codec"]
 
 [dependencies]
 # default
 prost = {git = "https://github.com/hyyking/prost.git", optional=true}
 bytes = {version = "0.4.7", optional=true}
-rsc2_derive = {path="../rsc2-derive", optional=true}
+rsc2_macro = {path="../rsc2-macro", optional=true, features = ["derive"]}
 
 # codec
 websocket-codec = {version="0.2.1-alpha.6", optional=true}

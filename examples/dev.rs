@@ -1,7 +1,6 @@
 use rsc2::api::raw::{NewRawAgent, RawAgent, RawRequestGame};
 use rsc2::hook::NextRequest;
 use rsc2::pb::{api, prelude::*};
-use rsc2::runtime::Coordinator;
 
 struct Bot;
 
@@ -16,7 +15,7 @@ impl RawAgent for Bot {
                 channel: Some(1),
                 message: Some("Hello World".into()),
             }),
-            game_loop: None,
+            game_loop: Some(0),
         }];
         NextRequest::Agent(api::request::Request::Action(api::RequestAction {
             actions,
@@ -24,15 +23,18 @@ impl RawAgent for Bot {
     }
 }
 
-fn main() -> std::io::Result<()> {
-    pretty_env_logger::init_timed();
-
-    let c = Coordinator::new();
-    let requests = c.run(RawRequestGame::new(
+#[rsc2::run]
+fn game() -> std::io::Result<u32> {
+    RawRequestGame::new(
         NewRawAgent(Bot {}),
         api::RequestCreateGame::default_config(),
         api::RequestJoinGame::default_config(),
-    ))?;
-    println!("requests {:?}", requests);
+    )
+}
+
+fn main() -> std::io::Result<()> {
+    pretty_env_logger::init_timed();
+    let request_count = game()?;
+    println!("requests {}", request_count);
     Ok(())
 }

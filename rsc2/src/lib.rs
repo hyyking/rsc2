@@ -9,3 +9,5 @@ pub mod pb {
     pub use rsc2_pb::api;
     pub use rsc2_pb::prelude;
 }
+
+pub use rsc2_macro::run;
