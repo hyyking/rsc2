@@ -6,8 +6,9 @@ edition = "2018"
 build = "build.rs"
 
 [features]
-default = ["rsc2_macro", "prost", "bytes"]
-codec = ["tokio-codec", "tokio-net", "websocket-codec"]
+default = ["rsc2_macro", "encoding"]
+codec = ["tokio-codec", "tokio-net", "websocket-codec", "encoding"]
+encoding = ["prost", "bytes"]
 
 [dependencies]
 # default

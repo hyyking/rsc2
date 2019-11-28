@@ -1,6 +1,7 @@
 use crate::api;
+pub use crate::default::DefaultConfig;
 
-pub use crate::default::*;
+#[cfg(feature = "encoding")]
 pub use prost::Message;
 
 /* pub enum Request {
@@ -29,6 +30,7 @@ pub use prost::Message;
 } */
 
 impl api::RequestJoinGame {
+    /// with race and default config
     pub fn with_race(race: api::Race) -> Self {
         use api::request_join_game::Participation;
         Self {
@@ -39,15 +41,17 @@ impl api::RequestJoinGame {
 }
 
 impl api::RequestObservation {
+    /// nofog observation
     pub fn nofog(game_loop: u32) -> Self {
         Self {
-            disable_fog: Some(false),
+            disable_fog: Some(true),
             game_loop: Some(game_loop),
         }
     }
 }
 
 impl api::Request {
+    /// request with an id
     pub fn with_id<M>(req: M, id: u32) -> Self
     where
         M: Into<api::request::Request>,
@@ -59,7 +63,6 @@ impl api::Request {
     }
 }
 
-#[allow(dead_code)]
 impl api::PlayerSetup {
     // OBSERVER ---------------
 
@@ -105,6 +108,7 @@ impl api::PlayerSetup {
 }
 
 impl api::InterfaceOptions {
+    /// raw interface options
     pub fn raw_mode() -> Self {
         Self {
             raw: Some(true),
@@ -133,46 +137,10 @@ impl api::InterfaceOptions {
             raw_crop_to_playable_area: Some(false),
         }
     }
-    /* fn feature_layer() -> Self {
-        Self {
-            raw: Some(true),
-            score: Some(true),
-            feature_layer: Some(sc2_api::SpatialCameraSetup {
-                resolution: Some(sc2_api::Size2Di {
-                    x: Some(0),
-                    y: Some(0),
-                }),
-                minimap_resolution: Some(sc2_api::Size2Di {
-                    x: Some(0),
-                    y: Some(0),
-                }),
-                width: Some(100_f32),
-                crop_to_playable_area: Some(true),
-                allow_cheating_layers: Some(true),
-            }),
-            render: Some(sc2_api::SpatialCameraSetup {
-                resolution: Some(sc2_api::Size2Di {
-                    x: Some(0),
-                    y: Some(0),
-                }),
-                minimap_resolution: Some(sc2_api::Size2Di {
-                    x: Some(0),
-                    y: Some(0),
-                }),
-                width: Some(100_f32),
-                crop_to_playable_area: Some(true),
-                allow_cheating_layers: Some(true),
-            }),
-            show_cloaked: Some(false),
-            show_burrowed_shadows: Some(false),
-            show_placeholders: Some(false),
-            raw_affects_selection: Some(true),
-            raw_crop_to_playable_area: Some(true),
-        }
-    } */
 }
 
 impl api::RequestStartReplay {
+    /// Request from file
     pub fn from_file<T: Into<String>>(file: T) -> Self {
         Self {
             map_data: None,

@@ -8,6 +8,7 @@ use tokio_codec::{Decoder, Encoder, Framed};
 use tokio_net::tcp::TcpStream;
 use websocket_codec::{Message as WSMessage, MessageCodec};
 
+/// Protobuf and TCP based [`Framed`](tokio::codec::Framed) type
 pub type SC2ProtobufClient = Framed<TcpStream, SC2ProtobufCodec>;
 
 pub fn from_framed(old: Framed<TcpStream, MessageCodec>) -> SC2ProtobufClient {
@@ -42,7 +43,7 @@ impl Encoder for SC2ProtobufCodec {
     type Error = io::Error;
 
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        let mut buffer = Vec::with_capacity(2 * 1024);
+        let mut buffer = Vec::with_capacity(item.encoded_len());
         item.encode(&mut buffer)?;
         match self.inner.encode(WSMessage::binary(buffer), dst) {
             Ok(()) => Ok(()),
