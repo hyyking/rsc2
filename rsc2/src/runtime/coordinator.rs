@@ -18,12 +18,21 @@ use rsc2_pb::{
 use tokio::{runtime::TaskExecutor, timer::Interval};
 use websocket_lite::ClientBuilder;
 
+/// Coordinator struct ...
 pub struct Coordinator<A> {
     sm: StateMachine,
     config: CoordinatorConfig,
 
     conn: Cell<Option<SC2ProtobufClient>>,
     agent: Cell<Option<A>>,
+}
+
+impl<A> std::fmt::Debug for Coordinator<A> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Coordinator")
+            .field("state", &self.sm)
+            .finish()
+    }
 }
 
 impl<A: AgentHook + 'static> Default for Coordinator<A> {
@@ -50,6 +59,12 @@ impl<A: AgentHook + 'static> Coordinator<A> {
         self.config.runtime.executor()
     }
 
+    /// Run an Iterator of [`Commands`](crate::runtime::Commands) to completion.
+    ///
+    /// # Panics
+    ///
+    /// The validity of the state switching is checked at runtime so it might produce errors
+    /// alongside the standart [`io::Error`](std::io::Error).
     pub fn run<Iter, Item>(&self, elements: Iter) -> io::Result<u32>
     where
         Item: Into<Commands<A>>,

@@ -17,7 +17,7 @@ macro_rules! bit_flag {
     };
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(super) struct StateMachine(Cell<u8>);
 
 impl StateMachine {

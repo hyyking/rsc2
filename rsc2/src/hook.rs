@@ -1,7 +1,13 @@
+/// hooks that are called by the coordinator.
 use rsc2_pb::api::{request::Request as rRequest, Response};
 
+/// Next request for a gameloop.
+#[derive(Debug, Clone)]
 pub enum NextRequest {
+    /// Agent will be producing the next request.
     Agent(rRequest),
+
+    /// Producer will be producing the next request.
     Observation,
 }
 
@@ -14,23 +20,21 @@ impl From<Option<rRequest>> for NextRequest {
     }
 }
 
-impl std::fmt::Debug for NextRequest {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct(&format!(
-            "NextRequest::{}",
-            match self {
-                Self::Agent(_) => "Agent",
-                Self::Observation => "Observation",
-            }
-        ))
-        .finish()
-    }
-}
-
+/// Base trait for hooking an agent to a coordinator that is InGame.
 pub trait AgentHook: Send + Unpin {
+    /// A producer is an infinite iterator that produces [`Request`](crate::pb::api::request::Request)s
     type Producer: Iterator<Item = rRequest> + Send;
+
+    /// First function called by the coordinator. It should always produce a request since it will
+    /// allow the coordinator to spawn the response hooks.
     fn on_start_hook(&mut self) -> NextRequest;
+
+    /// Called on every responses
     fn on_step_hook(&mut self, response: Response) -> NextRequest;
+
+    /// Called after the end of a game, should be use a way to reset the Agent's state
     fn on_close_hook(&mut self);
+
+    /// Builds a producer before the start of the game.
     fn build_producer() -> Self::Producer;
 }

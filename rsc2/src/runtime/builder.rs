@@ -34,25 +34,32 @@ impl From<&mut Builder> for CoordinatorConfig {
     }
 }
 
+/// Builder interface to get a new [`Coordinator`](crate::runtime::Coordinator).
+#[derive(Debug)]
 pub struct Builder {
     interval: Option<Duration>,
     runtime: Option<Runtime>,
 }
 
 impl Builder {
+    /// New builder instance
     pub fn new() -> Self {
         Self {
             interval: None,
             runtime: None,
         }
     }
+    /// Return the new [`Coordinator`](crate::runtime::Coordinator). Builder state is reset after this
+    /// call.
     pub fn build<A: AgentHook + 'static>(&mut self) -> Coordinator<A> {
         Coordinator::from(CoordinatorConfig::from(self))
     }
+    /// Interval between game loops. Default value beeing 50ms
     pub fn interval(&mut self, interval: Duration) -> &mut Self {
         self.interval = Some(interval);
         self
     }
+    /// Set a custom runtime for the [`Coordinator`](crate::runtime::Coordinator) to use.
     pub fn runtime(&mut self, runtime: Runtime) -> &mut Self {
         self.runtime = Some(runtime);
         self
