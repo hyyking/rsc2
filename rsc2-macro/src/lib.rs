@@ -6,6 +6,7 @@ use quote::quote;
 mod tryinto;
 mod wrapenum;
 
+/// Builds a coordinator on top of an [`Iterator`](std::iter::Iterator) of requests
 #[cfg(feature = "run")]
 #[proc_macro_attribute]
 pub fn run(args: TokenStream, item: TokenStream) -> TokenStream {
@@ -35,12 +36,14 @@ pub fn run(args: TokenStream, item: TokenStream) -> TokenStream {
     result.into()
 }
 
+/// Implements [`Into`](std::convert::Into) for types that are wrapped in an enum
 #[cfg(feature = "derive")]
 #[proc_macro_derive(WrapEnum)]
 pub fn macro_wrap_enum(t: TokenStream) -> TokenStream {
     wrapenum::try_wrap_enum(t).unwrap()
 }
 
+/// Implements [`TryFrom`](std::conver::TryFrom) for C-like enums
 #[cfg(feature = "derive")]
 #[proc_macro_derive(TryIntoEnum)]
 pub fn macro_try_into_enum(t: TokenStream) -> TokenStream {
