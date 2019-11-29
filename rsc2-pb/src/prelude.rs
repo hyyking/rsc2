@@ -4,31 +4,6 @@ pub use crate::default::DefaultConfig;
 #[cfg(feature = "encoding")]
 pub use prost::Message;
 
-/* pub enum Request {
-    CreateGame(RequestCreateGame),
-    JoinGame(RequestJoinGame),
-    RestartGame(RequestRestartGame),
-    StartReplay(RequestStartReplay),
-    LeaveGame(RequestLeaveGame),
-    QuickSave(RequestQuickSave),
-    QuickLoad(RequestQuickLoad),
-    Quit(RequestQuit),
-    GameInfo(RequestGameInfo),
-    Observation(RequestObservation),
-    Action(RequestAction),
-    ObsAction(RequestObserverAction),
-    Step(RequestStep),
-    Data(RequestData),
-    Query(RequestQuery),
-    SaveReplay(RequestSaveReplay),
-    MapCommand(RequestMapCommand),
-    ReplayInfo(RequestReplayInfo),
-    AvailableMaps(RequestAvailableMaps),
-    SaveMap(RequestSaveMap),
-    Ping(RequestPing),
-    Debug(RequestDebug),
-} */
-
 impl api::RequestJoinGame {
     /// with race and default config
     pub fn with_race(race: api::Race) -> Self {

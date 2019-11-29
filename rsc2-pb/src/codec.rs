@@ -1,3 +1,9 @@
+//! codec for Starcraft II websocket protobuf messages
+//!
+//! The default way of using this codec is by using the [`from_framed`](from_framed) function
+//! which will wrap a framed [`TcpStream`](tokio_net::tcp::TcpStream) and [`Message`](websocket_codec::MessageCodec) into a
+//! [`SC2ProtobufClient`](SC2ProtobufClient).
+
 use std::io;
 
 use crate::api;
@@ -11,8 +17,10 @@ use websocket_codec::{Message as WSMessage, MessageCodec};
 /// Protobuf and TCP based [`Framed`](tokio::codec::Framed) type
 pub type SC2ProtobufClient = Framed<TcpStream, SC2ProtobufCodec>;
 
+type WebsocketClient = Framed<TcpStream, MessageCodec>;
+
 /// wrap a Framed [`TcpStream`](tokio_net::tcp::TcpStream) with a [`MessageCodec`](websocket_codec::MessageCodec) into a [`SC2ProtobufClient`](SC2ProtobufClient)
-pub fn from_framed(old: Framed<TcpStream, MessageCodec>) -> SC2ProtobufClient {
+pub fn from_framed(old: WebsocketClient) -> SC2ProtobufClient {
     let parts = old.into_parts();
     Framed::new(parts.io, parts.codec.into())
 }

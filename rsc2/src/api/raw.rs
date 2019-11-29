@@ -1,21 +1,21 @@
-/// raw agent api
-///
-/// # Introduction
-///
-/// The purpose of the raw agent api is to provide mid-level acces to the InGame coordinator
-/// meaning you will receive the responses as they come but you won't have access the the producer
-/// nor the start and end hooks. Instead proxy methods such as
-/// [`on_end`](raw::RawAgent::on_start) and
-/// [`on_end`](raw::RawAgent::on_end) will be called.
-///
-/// ## On start
-///
-/// The first request sent by a [`NewRawAgent`](raw::NewRawAgent) is a
-/// [`Response::Observation`](rsc2_pb::api::pb::response::Response::Observation)
-///
-/// ## On end
-///
-/// [`on_end`](raw::RawAgent::on_end) will be called.
+//! raw agent api
+//!
+//! # Introduction
+//!
+//! The purpose of the raw agent api is to provide mid-level acces to the InGame coordinator
+//! meaning you will receive the responses as they come but you won't have access the the producer
+//! nor the start and end hooks. Instead proxy methods such as
+//! [`on_end`](raw::RawAgent::on_start) and
+//! [`on_end`](raw::RawAgent::on_end) will be called.
+//!
+//! ## On start
+//!
+//! The first request sent by a [`NewRawAgent`](raw::NewRawAgent) is a
+//! [`Response::Observation`](rsc2_pb::api::pb::response::Response::Observation)
+//!
+//! ## On end
+//!
+//! [`on_end`](raw::RawAgent::on_end) will be called.
 use crate::hook::{AgentHook, NextRequest};
 use crate::runtime::Commands;
 

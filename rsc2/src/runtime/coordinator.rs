@@ -18,32 +18,13 @@ use rsc2_pb::{
 use tokio::{runtime::TaskExecutor, timer::Interval};
 use websocket_lite::ClientBuilder;
 
-/// Coordinator struct ...
+/// Coordinator ...
 pub struct Coordinator<A> {
     sm: StateMachine,
     config: CoordinatorConfig,
 
     conn: Cell<Option<SC2ProtobufClient>>,
     agent: Cell<Option<A>>,
-}
-
-impl<A> std::fmt::Debug for Coordinator<A> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Coordinator")
-            .field("state", &self.sm)
-            .finish()
-    }
-}
-
-impl<A: AgentHook + 'static> Default for Coordinator<A> {
-    fn default() -> Self {
-        Self {
-            sm: StateMachine::default(),
-            config: CoordinatorConfig::default(),
-            conn: Cell::default(),
-            agent: Cell::default(),
-        }
-    }
 }
 
 impl<A: AgentHook + 'static> Coordinator<A> {
@@ -64,69 +45,72 @@ impl<A: AgentHook + 'static> Coordinator<A> {
     /// # Panics
     ///
     /// The validity of the state switching is checked at runtime so it might produce errors
-    /// alongside the standart [`io::Error`](std::io::Error).
+    /// alongside the stream's [`io::Error`](std::io::Error).
     pub fn run<Iter, Item>(&self, elements: Iter) -> io::Result<u32>
     where
         Item: Into<Commands<A>>,
         Iter: IntoIterator<Item = Item>,
     {
-        let mut request_count: u32 = 0;
+        let mut count: u32 = 0;
 
         for element in elements.into_iter().map(|el| el.into()) {
-            request_count += 1;
+            count += 1;
             self.sm.validate(&element)?;
             match element {
                 Commands::Launched { socket, .. } => {
                     log::debug!("Commands::Launched");
+
                     self.connect(socket)?;
                     self.sm.launched()
                 }
                 Commands::CreateGame { request } => {
                     log::debug!("Commands::CreateGame");
 
-                    let response = self.send(pb::Request::with_id(request, request_count))?;
+                    let response = self.send(pb::Request::with_id(request, count))?;
                     validate_status!(response.status => pb::Status::InitGame)?;
 
                     self.sm.initgame()
                 }
                 Commands::JoinGame { request, agent } => {
                     log::debug!("Commands::JoinGame");
+
                     self.agent.set(Some(agent));
 
-                    let response = self.send(pb::Request::with_id(request, request_count))?;
+                    let response = self.send(pb::Request::with_id(request, count))?;
                     validate_status!(response.status => pb::Status::InGame)?;
 
                     self.sm.ingame();
-                    request_count = self.play_game(request_count)?;
+                    count = self.play_game(count)?;
                     self.sm.ended();
                 }
                 Commands::StartReplay { request, agent } => {
                     log::debug!("Commands::StartReplay");
+
                     self.agent.set(Some(agent));
 
-                    let response = self.send(pb::Request::with_id(request, request_count))?;
+                    let response = self.send(pb::Request::with_id(request, count))?;
                     validate_status!(response.status => pb::Status::InReplay)?;
 
                     self.sm.inreplay();
-                    request_count = self.play_game(request_count)?;
+                    count = self.play_game(count)?;
                     self.sm.ended();
                 }
                 Commands::RestartGame => {
                     log::debug!("Commands::RestartGame");
-                    let response = self.send(pb::Request::with_id(
-                        pb::RequestRestartGame {},
-                        request_count,
-                    ))?;
+
+                    let response =
+                        self.send(pb::Request::with_id(pb::RequestRestartGame {}, count))?;
                     validate_status!(response.status => pb::Status::InGame)?;
 
                     self.sm.ingame();
-                    request_count = self.play_game(request_count)?;
+                    count = self.play_game(count)?;
                     self.sm.ended();
                 }
                 Commands::LeaveGame => {
                     log::debug!("Commands::LeaveGame");
+
                     let response =
-                        self.send(pb::Request::with_id(pb::RequestLeaveGame {}, request_count))?;
+                        self.send(pb::Request::with_id(pb::RequestLeaveGame {}, count))?;
                     validate_status!(response.status => pb::Status::Launched)?;
 
                     self.sm.reset();
@@ -134,15 +118,15 @@ impl<A: AgentHook + 'static> Coordinator<A> {
                 }
                 Commands::QuitGame => {
                     log::debug!("Commands::QuitGame");
-                    let response =
-                        self.send(pb::Request::with_id(pb::RequestQuit {}, request_count))?;
+
+                    let response = self.send(pb::Request::with_id(pb::RequestQuit {}, count))?;
                     validate_status!(response.status => pb::Status::Quit)?;
 
                     self.sm.reset();
                 }
             }
         }
-        Ok(request_count)
+        Ok(count)
     }
 
     fn play_game(&self, count: u32) -> io::Result<u32> {
@@ -339,7 +323,24 @@ impl<A: AgentHook + 'static> Coordinator<A> {
     }
 }
 
-impl<A: AgentHook + 'static> From<CoordinatorConfig> for Coordinator<A> {
+impl<A> std::fmt::Debug for Coordinator<A> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Coordinator")
+            .field("state", &self.sm)
+            .finish()
+    }
+}
+impl<A> Default for Coordinator<A> {
+    fn default() -> Self {
+        Self {
+            sm: StateMachine::default(),
+            config: CoordinatorConfig::default(),
+            conn: Cell::default(),
+            agent: Cell::default(),
+        }
+    }
+}
+impl<A> From<CoordinatorConfig> for Coordinator<A> {
     fn from(config: CoordinatorConfig) -> Self {
         Self {
             config,

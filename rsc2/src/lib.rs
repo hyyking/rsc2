@@ -73,9 +73,11 @@ pub mod hook;
 #[doc(inline)]
 pub mod runtime;
 
-#[doc(inline)]
+/// protobuf code and prelude traits
 pub mod pb {
+    #[doc(inline)]
     pub use rsc2_pb::api;
+    #[doc(inline)]
     pub use rsc2_pb::prelude;
 }
 

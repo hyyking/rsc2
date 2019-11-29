@@ -2,7 +2,7 @@ use crate::hook;
 use rsc2_pb::api as pb;
 use std::net::SocketAddrV4;
 
-/// commands than can be fed in the coordinator.
+/// commands than can be fed in the coordinator to interact with a running instance.
 #[derive(Clone, Debug)]
 pub enum Commands<A: hook::AgentHook> {
     /// Launch a game or set it as launched. This call will attempt a connection to the Starcraft II instance.

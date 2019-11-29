@@ -1,12 +1,10 @@
-//! *rsc2-pb*
-//!
 //! This crate provides the raw elements used in [`rsc2`](rsc2)
 //!
 //! Currently implements:
 //!
-//! * Rust code generated from the protobuf descriptor.
+//! * Rust code generated from the protobuf api.
 //! * Custom traits and implementations for the generated code.
-//! * Codec to be used alongside a websocket client (use [`websocket_codec`](websocket_codec)
+//! * Codec to be used alongside a websocket client (uses [`websocket_codec`](crate::websocket_codec)
 //!   under the hood).
 //!
 //! # Features
@@ -42,7 +40,29 @@ pub mod api {
 
 pub use default::DefaultConfig;
 
-/// validate a [`api::Status`](api::Status) variable and variant.
+/// validate a [`Status`](crate::api::Status) variable and variant.
+///
+/// This macro returns a [`io::Result<Status>`](std::io::Result) block.
+///
+/// # Example
+///
+/// ```no_run
+/// use rsc2_pb::{validate_status, api};
+///
+/// fn main() {
+///     // This what the status will look like in a response.
+///     let after_start = Some(api::Status::InGame as i32);
+///     assert!(validate_status!(after_start => api::Status::InGame).is_ok());
+///     assert!(validate_status!(after_start => api::Status::Ended).is_err());
+///
+///     let wrong = Some(99999);
+///     assert!(validate_status!(after_start => api::Status::InGame).is_err());
+///
+///     let empty = None;
+///     assert!(validate_status!(empty => api::Status::Ended).is_err());
+///
+/// }
+/// ```
 #[macro_export]
 macro_rules! validate_status {
     ($status:expr => $variant:path) => {{
@@ -65,7 +85,7 @@ macro_rules! validate_status {
                     )),
                     None => Err(::std::io::Error::new(
                         ::std::io::ErrorKind::ConnectionAborted,
-                        "Wrong status Code",
+                        "Status code is empty",
                     )),
                 },
             )

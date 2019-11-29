@@ -1,4 +1,4 @@
-/// hooks that are called by the coordinator.
+//! hooks called by the coordinator on events.
 use rsc2_pb::api::{request::Request as rRequest, Response};
 
 /// Next request for a gameloop.
@@ -32,7 +32,7 @@ pub trait AgentHook: Send + Unpin {
     /// Called on every responses
     fn on_step_hook(&mut self, response: Response) -> NextRequest;
 
-    /// Called after the end of a game, should be use a way to reset the Agent's state
+    /// Called after the end of a game, should be use as a way to reset the agent's inner state.
     fn on_close_hook(&mut self);
 
     /// Builds a producer before the start of the game.
