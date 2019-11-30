@@ -3,6 +3,7 @@
 mod builder;
 mod commands;
 mod coordinator;
+mod ressource;
 mod state;
 
 #[doc(inline)]

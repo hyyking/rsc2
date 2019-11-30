@@ -20,7 +20,7 @@ use crate::hook::{AgentHook, NextRequest};
 use crate::runtime::Commands;
 
 use rsc2_pb::api as pb;
-use std::marker::Unpin;
+use std::pin::Pin;
 
 /// Iterator of request to play exactly one game using the requests fed.
 #[allow(missing_debug_implementations)]
@@ -57,12 +57,12 @@ impl<A: AgentHook> IntoIterator for RawRequestGame<A> {
 }
 
 /// Trait for proxy [`AgentHook`](crate::hook::AgentHook) calls
-pub trait RawAgent: Send + Unpin {
+pub trait RawAgent: Send {
     /// Called upon receiving a [`Response::GameInfo`](crate::pb::api::response::Response::GameInfo).
-    fn on_start(&mut self, response: pb::Response) -> NextRequest;
+    fn on_start(self: Pin<&mut Self>, response: pb::Response) -> NextRequest;
 
     /// Called upon receiving anything not handled by on_start and on_end.
-    fn on_response(&mut self, response: pb::Response) -> NextRequest;
+    fn on_response(self: Pin<&mut Self>, response: pb::Response) -> NextRequest;
 
     /// Called after receiving the first [`Response::GameInfo`](crate::pb::api::response::Response::GameInfo).
     fn on_end(&mut self);
@@ -75,19 +75,20 @@ pub struct NewRawAgent<A: RawAgent>(pub A);
 impl<A: RawAgent> AgentHook for NewRawAgent<A> {
     type Producer = std::iter::Cycle<RawProducer>;
 
-    fn on_start_hook(&mut self) -> NextRequest {
+    fn on_start_hook(self: Pin<&mut Self>) -> NextRequest {
         log::trace!("NewRawAgent::on_start_hook");
         NextRequest::Agent(pb::RequestGameInfo::default().into())
     }
-    fn on_step_hook(&mut self, response: pb::Response) -> NextRequest {
+    fn on_step_hook(self: Pin<&mut Self>, response: pb::Response) -> NextRequest {
+        let agent = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
         log::trace!(
             "NewRawAgent::on_step_hook | id: {}",
             response.id.unwrap_or(std::u32::MAX)
         );
         if let Some(pb::response::Response::GameInfo(_)) = &response.response {
-            return self.0.on_start(response);
+            return agent.on_start(response);
         }
-        self.0.on_response(response)
+        agent.on_response(response)
     }
     fn on_close_hook(&mut self) {
         log::trace!("NewRawAgent::on_close_hook");
