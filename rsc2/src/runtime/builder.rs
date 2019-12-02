@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::time::Duration;
 
 use crate::hook::AgentHook;
@@ -8,28 +9,32 @@ use tokio::runtime::{Builder as rtBuilder, Runtime};
 const DEFAULT_INTERVAL: Duration = Duration::from_millis(50);
 const DEFAULT_CORE_THREADS: usize = 4;
 
+fn default_runtime() -> Runtime {
+    rtBuilder::new()
+        .enable_all()
+        .threaded_scheduler()
+        .thread_name("rsc2-worker")
+        .num_threads(DEFAULT_CORE_THREADS)
+        .build()
+        .unwrap()
+}
+
 pub(super) struct CoordinatorConfig {
     pub(super) interval: Duration,
-    pub(super) runtime: Runtime,
+    pub(super) runtime: RefCell<Runtime>,
 }
 impl Default for CoordinatorConfig {
     fn default() -> Self {
         Self {
             interval: DEFAULT_INTERVAL,
-            runtime: Runtime::new().unwrap(),
+            runtime: RefCell::new(default_runtime()),
         }
     }
 }
 impl From<&mut Builder> for CoordinatorConfig {
     fn from(b: &mut Builder) -> Self {
         let interval = b.interval.take().unwrap_or(DEFAULT_INTERVAL);
-        let runtime = b.runtime.take().unwrap_or({
-            rtBuilder::new()
-                .name_prefix("rsc2-worker-")
-                .core_threads(DEFAULT_CORE_THREADS)
-                .build()
-                .unwrap_or(Runtime::new().unwrap())
-        });
+        let runtime = RefCell::new(b.runtime.take().unwrap_or(default_runtime()));
         Self { interval, runtime }
     }
 }

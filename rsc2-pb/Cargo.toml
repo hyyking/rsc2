@@ -7,19 +7,19 @@ build = "build.rs"
 
 [features]
 default = ["rsc2_macro", "encoding"]
-codec = ["tokio-codec", "tokio-net", "websocket-codec", "encoding"]
+codec = ["tokio-util", "tokio", "websocket-codec", "encoding"]
 encoding = ["prost", "bytes"]
 
 [dependencies]
 # default
-prost = {git = "https://github.com/hyyking/prost.git", optional=true}
-bytes = {version = "0.4.7", optional=true}
+prost = {git = "https://github.com/hyyking/prost.git", branch="master", optional=true}
+bytes = {version = "0.5.2", optional=true}
 rsc2_macro = {path="../rsc2-macro", optional=true, features = ["derive"]}
 
 # codec
-websocket-codec = {version="0.2.1-alpha.6", optional=true}
-tokio-codec = {version="0.2.0-alpha.6", optional=true}
-tokio-net = {version="0.2.0-alpha.6", optional=true}
+websocket-codec = {path ="../../rust-websocket-lite/websocket-codec", optional=true}
+tokio-util = {version="0.2.0", features=["codec"], optional=true}
+tokio = {version="0.2.2", features=["tcp"], optional=true}
 
 [build-dependencies]
 prost-build = {git = "https://github.com/hyyking/prost.git"}

@@ -2,10 +2,15 @@ use rsc2::api::raw::{NewRawAgent, RawAgent, RawRequestGame};
 use rsc2::hook::NextRequest;
 use rsc2::pb::{api, prelude::*};
 
+use std::pin::Pin;
+
 struct Bot;
 
 impl RawAgent for Bot {
-    fn on_response(&mut self, _: api::Response) -> NextRequest {
+    fn on_start(self: Pin<&mut Self>, _: api::Response) -> NextRequest {
+        NextRequest::Observation
+    }
+    fn on_response(self: Pin<&mut Self>, _: api::Response) -> NextRequest {
         let actions = vec![api::Action {
             action_raw: None,
             action_feature_layer: None,
@@ -21,6 +26,7 @@ impl RawAgent for Bot {
             actions,
         }))
     }
+    fn on_end(&mut self) {}
 }
 
 #[rsc2::run]

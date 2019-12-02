@@ -16,7 +16,7 @@ use rsc2_pb::{
     codec::{from_framed, SC2ProtobufClient},
     validate_status,
 };
-use tokio::{runtime::TaskExecutor, timer::Interval};
+use tokio::{runtime::Handle, time::interval};
 use websocket_lite::ClientBuilder;
 
 /// Coordinator ...
@@ -36,9 +36,8 @@ impl<A: AgentHook + 'static> Coordinator<A> {
 
     /// Get a handle to the coordinator's runtime. Tasks spawned will be concurrently run alongside
     /// the coordinators requests and responses. It is advised to only spawn tasks within your agent.
-    // TODO: Create a handle that can be used to spawn tasks during the game.
-    pub fn executor(&self) -> TaskExecutor {
-        self.config.runtime.executor()
+    pub fn handle(&self) -> Handle {
+        self.config.runtime.borrow().handle().clone()
     }
 
     /// Run an Iterator of [`Commands`](crate::runtime::Commands) to completion.
@@ -150,8 +149,8 @@ impl<A: AgentHook + 'static> Coordinator<A> {
 
         let mut ig = InGameRessource {
             main: MainRessource {
-                rt: rt.executor(),
-                timer: Interval::new_interval(self.config.interval),
+                rt: &rt.borrow().handle().clone(),
+                timer: interval(self.config.interval),
                 lock: lock.clone(),
             },
             reqr: Arc::new(RequestRessource {
@@ -169,7 +168,7 @@ impl<A: AgentHook + 'static> Coordinator<A> {
             }),
         };
 
-        rt.block_on(ingame::run(&mut ig))?;
+        rt.borrow_mut().block_on(ingame::run(&mut ig))?;
 
         let InGameRessource {
             reqr, resr, ager, ..
@@ -198,6 +197,7 @@ impl<A: AgentHook + 'static> Coordinator<A> {
         let framed = self
             .config
             .runtime
+            .borrow_mut()
             .block_on(builder.async_connect_insecure())
             .map_err(|e| *e.downcast::<io::Error>().unwrap())?;
         self.conn.set(Some(from_framed(framed)));
@@ -214,6 +214,7 @@ impl<A: AgentHook + 'static> Coordinator<A> {
         let response = self
             .config
             .runtime
+            .borrow_mut()
             .block_on(requests::filter_response(&mut conn, request))?;
         self.reset_ressource(None, Some(conn));
         Ok(response)
@@ -288,7 +289,9 @@ mod ingame {
     use std::ops::DerefMut;
     use std::pin::Pin;
 
-    pub(super) async fn run<A: AgentHook + 'static>(ig: &mut InGameRessource<A>) -> io::Result<()> {
+    pub(super) async fn run<A: AgentHook + 'static>(
+        ig: &mut InGameRessource<'_, A>,
+    ) -> io::Result<()> {
         let start_hook = match unsafe { Pin::new_unchecked(ig.ager.agent.lock().await.deref_mut()) }
             .on_start_hook()
         {
@@ -304,8 +307,9 @@ mod ingame {
                 ig.reqr.count.fetch_add(1, Ordering::Acquire) + 1,
             ))
             .await?;
+        loop {
+            ig.main.timer.tick().await;
 
-        while let Some(_) = ig.main.timer.next().await {
             if ig.main.lock.load(Ordering::Acquire) {
                 break;
             }

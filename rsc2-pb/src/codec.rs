@@ -10,8 +10,8 @@ use crate::api;
 
 use bytes::BytesMut;
 use prost::Message;
-use tokio_codec::{Decoder, Encoder, Framed};
-use tokio_net::tcp::TcpStream;
+use tokio::net::TcpStream;
+use tokio_util::codec::{Decoder, Encoder, Framed};
 use websocket_codec::{Message as WSMessage, MessageCodec};
 
 /// Protobuf and TCP based [`Framed`](tokio::codec::Framed) type

@@ -9,21 +9,21 @@ use crate::pb::api as pb;
 use futures::lock::Mutex;
 use futures::stream::{SplitSink, SplitStream};
 use rsc2_pb::codec::SC2ProtobufClient;
-use tokio::runtime::TaskExecutor;
-use tokio::timer::Interval;
+use tokio::runtime::Handle;
+use tokio::time::Interval;
 
 type StreamPart = SplitStream<SC2ProtobufClient>;
 type SinkPart = SplitSink<SC2ProtobufClient, pb::Request>;
 
-pub(super) struct InGameRessource<A: AgentHook + 'static> {
-    pub(super) main: MainRessource,
+pub(super) struct InGameRessource<'a, A: AgentHook + 'static> {
+    pub(super) main: MainRessource<'a>,
     pub(super) reqr: Arc<RequestRessource<A>>,
     pub(super) resr: Arc<ResponseRessource>,
     pub(super) ager: Arc<AgentRessource<A>>,
 }
 
-pub(super) struct MainRessource {
-    pub(super) rt: TaskExecutor,      // Main loop
+pub(super) struct MainRessource<'a> {
+    pub(super) rt: &'a Handle,        // Main loop
     pub(super) timer: Interval,       // Main loop
     pub(super) lock: Arc<AtomicBool>, // Main loop | Agent loop
 }
