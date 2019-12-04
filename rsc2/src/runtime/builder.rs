@@ -13,7 +13,7 @@ fn default_runtime() -> Runtime {
     rtBuilder::new()
         .enable_all()
         .threaded_scheduler()
-        .thread_name("rsc2-worker")
+        .thread_name("rsc2-runtime")
         .num_threads(DEFAULT_CORE_THREADS)
         .build()
         .unwrap()

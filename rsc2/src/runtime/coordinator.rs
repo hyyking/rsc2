@@ -10,13 +10,13 @@ use crate::hook::{AgentHook, NextRequest};
 use crate::runtime::ressource::*;
 use crate::runtime::{builder::CoordinatorConfig, state::StateMachine, Commands};
 
-use futures::{lock::Mutex, FutureExt, SinkExt, StreamExt};
+use futures::{lock::Mutex, SinkExt, StreamExt};
 use rsc2_pb::{
     api as pb,
     codec::{from_framed, SC2ProtobufClient},
     validate_status,
 };
-use tokio::{runtime::Handle, time::interval};
+use tokio::time::interval;
 use websocket_lite::ClientBuilder;
 
 /// Coordinator ...
@@ -32,12 +32,6 @@ impl<A: AgentHook + 'static> Coordinator<A> {
     /// Build a new coordinator with default config.
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Get a handle to the coordinator's runtime. Tasks spawned will be concurrently run alongside
-    /// the coordinators requests and responses. It is advised to only spawn tasks within your agent.
-    pub fn handle(&self) -> Handle {
-        self.config.runtime.borrow().handle().clone()
     }
 
     /// Run an Iterator of [`Commands`](crate::runtime::Commands) to completion.
@@ -149,33 +143,32 @@ impl<A: AgentHook + 'static> Coordinator<A> {
 
         let mut ig = InGameRessource {
             main: MainRessource {
-                rt: &rt.borrow().handle().clone(),
-                timer: interval(self.config.interval),
+                timer: rt.borrow().enter(|| interval(self.config.interval)),
                 lock: lock.clone(),
             },
-            reqr: Arc::new(RequestRessource {
-                count: count.clone(),
-                sink: Mutex::new(sink),
-                prod: Mutex::new(A::build_producer()),
-            }),
-            resr: Arc::new(ResponseRessource {
-                count,
-                stream: Mutex::new(stream),
-            }),
-            ager: Arc::new(AgentRessource {
-                lock,
-                agent: Mutex::new(agent),
+            loop_res: Arc::new(LoopRessource {
+                reqr: RequestRessource {
+                    count: count.clone(),
+                    sink: Mutex::new(sink),
+                    prod: Mutex::new(A::build_producer()),
+                },
+                resr: ResponseRessource {
+                    count,
+                    stream: Mutex::new(stream),
+                },
+                ager: AgentRessource {
+                    lock,
+                    agent: Mutex::new(agent),
+                },
             }),
         };
 
         rt.borrow_mut().block_on(ingame::run(&mut ig))?;
 
-        let InGameRessource {
-            reqr, resr, ager, ..
-        } = ig;
-        let RequestRessource { sink, count, .. } = unwrap_arc(reqr)?;
-        let stream = unwrap_arc(resr)?.stream.into_inner();
-        let mut agent = unwrap_arc(ager)?.agent.into_inner();
+        let LoopRessource { reqr, resr, ager } = unwrap_arc(ig.loop_res)?;
+        let RequestRessource { sink, count, .. } = reqr;
+        let stream = resr.stream.into_inner();
+        let mut agent = ager.agent.into_inner();
 
         agent.on_close_hook();
 
@@ -285,72 +278,67 @@ mod ingame {
 
     use super::*;
     use crate::runtime::ressource::{AgentRessource, InGameRessource, ResponseRessource};
-    use futures::future::RemoteHandle;
     use std::ops::DerefMut;
     use std::pin::Pin;
 
-    pub(super) async fn run<A: AgentHook + 'static>(
-        ig: &mut InGameRessource<'_, A>,
-    ) -> io::Result<()> {
-        let start_hook = match unsafe { Pin::new_unchecked(ig.ager.agent.lock().await.deref_mut()) }
-            .on_start_hook()
-        {
-            NextRequest::Agent(req) => req,
-            NextRequest::Observation => ig.reqr.prod.lock().await.next().unwrap(),
-        };
-        ig.reqr
+    pub(super) async fn run<A: AgentHook + 'static>(ig: &mut InGameRessource<A>) -> io::Result<()> {
+        let start_hook =
+            match unsafe { Pin::new_unchecked(ig.loop_res.ager.agent.lock().await.deref_mut()) }
+                .on_start_hook()
+            {
+                NextRequest::Agent(req) => req,
+                NextRequest::Observation => ig.loop_res.reqr.prod.lock().await.next().unwrap(),
+            };
+        ig.loop_res
+            .reqr
             .sink
             .lock()
             .await
             .send(pb::Request::with_id(
                 start_hook,
-                ig.reqr.count.fetch_add(1, Ordering::Acquire) + 1,
+                ig.loop_res.reqr.count.fetch_add(1, Ordering::Acquire) + 1,
             ))
             .await?;
         loop {
-            ig.main.timer.tick().await;
+            let tick = ig.main.timer.tick().await;
 
             if ig.main.lock.load(Ordering::Acquire) {
                 break;
             }
 
-            let (stream_remote, stream_handle) =
-                ingame::response_loop(ig.resr.clone()).remote_handle();
-
-            let (agent_remote, agent_handle) =
-                ingame::agent_loop(stream_handle, ig.ager.clone()).remote_handle();
-
-            ig.main.rt.spawn(stream_remote);
-            ig.main.rt.spawn(agent_remote);
-            ig.main.rt.spawn({
-                let reqr = ig.reqr.clone();
-                async move {
-                    let request = match agent_handle.await {
-                        Some(request) => request,
-                        None => return,
-                    };
+            tokio::spawn({
+                let lr = ig.loop_res.clone();
+                tokio::time::timeout_at(tick + std::time::Duration::from_millis(50), async move {
+                    let request =
+                        match ingame::agent_loop(ingame::response_loop(&lr.resr).await, &lr.ager)
+                            .await
+                        {
+                            Some(request) => request,
+                            None => return,
+                        };
                     let request = pb::Request::with_id(
                         match request {
                             NextRequest::Agent(req) => req,
-                            NextRequest::Observation => reqr.prod.lock().await.next().unwrap(),
+                            NextRequest::Observation => lr.reqr.prod.lock().await.next().unwrap(),
                         },
-                        reqr.count.fetch_add(1, Ordering::AcqRel) + 1,
+                        lr.reqr.count.fetch_add(1, Ordering::AcqRel) + 1,
                     );
-                    log::trace!("sender loop: {}", reqr.count.load(Ordering::Acquire));
-                    reqr.sink
+                    log::trace!("sender loop: {}", lr.reqr.count.load(Ordering::Acquire));
+                    lr.reqr
+                        .sink
                         .lock()
                         .await
                         .send(request)
                         .await
                         .expect("response");
-                }
+                })
             });
         }
         Ok(())
     }
 
     pub(super) async fn response_loop(
-        resr: Arc<ResponseRessource>,
+        resr: &ResponseRessource,
     ) -> Option<<SC2ProtobufClient as futures::Stream>::Item> {
         let mut stream = resr.stream.lock().await;
         log::trace!("receiver loop: {}", resr.count.load(Ordering::Acquire));
@@ -360,13 +348,13 @@ mod ingame {
         conn.next().await
     }
 
-    type RemoteStreamItem = RemoteHandle<Option<<SC2ProtobufClient as futures::Stream>::Item>>;
+    type RemoteStreamItem = Option<<SC2ProtobufClient as futures::Stream>::Item>;
 
     pub(super) async fn agent_loop<A: AgentHook + 'static>(
         response: RemoteStreamItem,
-        ager: Arc<AgentRessource<A>>,
+        ager: &AgentRessource<A>,
     ) -> Option<NextRequest> {
-        match response.await {
+        match response {
             Some(Ok(obs)) => {
                 if validate_status!(obs.status => pb::Status::Ended).is_ok() {
                     ager.lock.store(true, Ordering::Release);
