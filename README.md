@@ -1,13 +1,59 @@
-# RSC2
+# *RSC2*
 
-## Crates
+A runtime for executing sc2-api agents
 
-- rsc2 is the engine for running a SC2 Bot
-- rsc_pb is the protobuf code generation and utils for working with the rust-generated code
-- rsc2_derive are the derive macros for the rust-generated code
+## Release
 
-## TODO
+There is currently no plan for release this crate to [`crates.io`](https://crate.io) for the moment as the code and the api needs to be cleaned up.
 
-- make rsc2 a futures tokio reactor when state is InGame
-- Implement game configuration process
-- Bot API
+## Contributing
+
+- Open an issue if you want anything to change
+- Pull requests are welcome
+
+## Example
+
+You need to have a Starcraft II instance running to use this API atm.
+
+```rust
+// "Hello World" spamming agent
+
+use rsc2::api::raw::{NewRawAgent, RawAgent, RawRequestGame};
+use rsc2::hook::NextRequest;
+use rsc2::pb::{api, prelude::*};
+
+use std::pin::Pin;
+
+struct Bot;
+
+impl RawAgent for Bot {
+    fn on_start(self: Pin<&mut Self>, _: api::Response) -> NextRequest {
+        NextRequest::Observation
+    }
+    fn on_response(self: Pin<&mut Self>, _: api::Response) -> NextRequest {
+        let actions = vec![api::Action {
+            action_raw: None,
+            action_feature_layer: None,
+            action_render: None,
+            action_ui: None,
+            action_chat: Some(api::ActionChat {
+                channel: Some(1),
+                message: Some("Hello World".into()),
+            }),
+            game_loop: Some(0),
+        }];
+        NextRequest::Agent(api::request::Request::Action(api::RequestAction {
+            actions,
+        }))
+    }
+    fn on_end(&mut self) {}
+}
+
+#[rsc2::run]
+fn main() -> std::io::Result<u32> {
+    RawRequestGame::new(
+        NewRawAgent(Bot {}),
+        api::RequestCreateGame::default_config(),
+        api::RequestJoinGame::default_config(),
+    )
+}
