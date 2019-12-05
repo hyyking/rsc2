@@ -5,7 +5,14 @@ authors = ["hyyking <leoduret@outlook.com>"]
 edition = "2018"
 
 [dependencies]
-rsc2_pb = {path="../rsc2-pb", features=["codec"]}
-tokio = {version = "0.2.0-alpha.6", features=["rt-full"]}
-websocket-lite = "0.3.1-alpha.6"
-futures-preview = "0.3.0-alpha.19"
+rsc2_pb = {path="../rsc2-pb", features=["default", "codec"]}
+rsc2_macro = {path="../rsc2-macro", features=["run"]}
+tokio = {version = "0.2.2", features=["time", "rt-threaded", "tcp", "io-driver"]}
+websocket-lite = {path= "../../rust-websocket-lite/websocket-lite"}
+futures = "0.3.1"
+pin-utils = "0.1.0-alpha.4"
+log = "0.4.8"
+
+[[test]]
+name = "runtime"
+path = "../tests/runtime.rs"
