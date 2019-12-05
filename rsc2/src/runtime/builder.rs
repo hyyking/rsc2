@@ -6,7 +6,7 @@ use crate::runtime::Coordinator;
 
 use tokio::runtime::{Builder as rtBuilder, Runtime};
 
-const DEFAULT_INTERVAL: Duration = Duration::from_millis(50);
+const DEFAULT_INTERVAL: Duration = Duration::from_millis(25);
 const DEFAULT_CORE_THREADS: usize = 4;
 
 fn default_runtime() -> Runtime {
