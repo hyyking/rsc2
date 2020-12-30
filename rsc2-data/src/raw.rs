@@ -107,8 +107,8 @@ pub struct Energy {
 
 #[derive(Deserialize, Debug)]
 pub struct Cargo {
-    pub cargo_size: usize,
-    pub cargo_capacity: usize,
+    pub cargo_size: Option<usize>,
+    pub cargo_capacity: Option<usize>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -135,8 +135,9 @@ pub struct RawUnit {
 
     #[serde(flatten)]
     pub energy: Option<Energy>,
+
     #[serde(flatten)]
-    pub cargo: Option<Cargo>,
+    pub cargo: Cargo,
 
     pub weapons: Vec<RawWeapon>,
     pub attributes: Vec<RawAttributes>,
