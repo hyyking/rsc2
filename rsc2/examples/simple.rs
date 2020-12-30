@@ -56,13 +56,14 @@ struct GameState {
     common: protocol::PlayerCommon,
     allies: Vec<protocol::Unit>,
     enemies: Vec<protocol::Unit>,
+    stepped: bool,
 }
 
 impl GameState {
-    fn update(&mut self, resp: &protocol::Response) {
+    fn update(&mut self, response: &protocol::Response) {
         let protocol::Response { response, .. } = response;
 
-        match response.unwrap() {
+        match response.as_ref().unwrap() {
             protocol::response::Response::Observation(obs) => {
                 self.common = obs
                     .observation
@@ -70,8 +71,11 @@ impl GameState {
                     .and_then(|obs| obs.player_common.clone())
                     .unwrap();
 
-                let protocol::ObservationRaw { player, units, .. } =
-                    obs.observation.and_then(|obs| obs.raw_data).unwrap();
+                let protocol::ObservationRaw { units, .. } = obs
+                    .observation
+                    .as_ref()
+                    .and_then(|obs| obs.raw_data.as_ref())
+                    .unwrap();
 
                 self.allies = units
                     .iter()
@@ -86,6 +90,35 @@ impl GameState {
             }
             _ => {}
         }
+    }
+    fn on_step(&mut self) -> Vec<protocol::Action> {
+        if self.stepped {
+            return vec![];
+        }
+
+        let mut actions = vec![];
+        for unit in &self.allies {
+            if unit.unit_type != Some(rsc2_pb::ids::UnitId::Scv as u32) {
+                continue;
+            }
+
+            let mut raw = protocol::ActionRaw::default();
+            raw.action = Some(protocol::action_raw::Action::UnitCommand(
+                protocol::ActionRawUnitCommand {
+                    ability_id: Some(rsc2_pb::ids::AbilityId::TauntTaunt as i32),
+                    unit_tags: vec![unit.tag.unwrap()],
+                    queue_command: Some(true),
+                    target: None,
+                },
+            ));
+
+            actions.push(protocol::Action {
+                action_raw: Some(raw),
+                ..Default::default()
+            })
+        }
+        self.stepped = true;
+        actions
     }
 }
 
@@ -112,10 +145,21 @@ async fn main() -> io::Result<()> {
             Some(futures::future::Either::Right(_)) => break (Ok(())), // game ended
             None => break Err(io::Error::new(io::ErrorKind::Other, "stream ended")),
             Some(futures::future::Either::Left(response)) => response,
-        };
+        }?;
 
+        if let Some(protocol::response::Response::Action(ref action)) = response.response {
+            dbg!(action.result().collect::<Vec<_>>());
+        }
         gs.update(&response);
 
+        let mut req = protocol::Request::default();
+        req.request = Some(protocol::request::Request::Action(
+            protocol::RequestAction {
+                actions: gs.on_step(),
+            },
+        ));
+
+        gameloop.send(req).await?;
         idx += 1;
     }
 }
