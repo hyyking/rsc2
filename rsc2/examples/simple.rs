@@ -1,13 +1,13 @@
 use std::io;
 
 use futures::{SinkExt, StreamExt};
-use rsc2::{connect, protocol, state_machine};
+use rsc2::{connect, protocol, state_machine, Connection};
 
 fn player_setup() -> Vec<protocol::PlayerSetup> {
     let mut p1 = protocol::PlayerSetup::default();
     p1.set_type(protocol::PlayerType::Participant);
     p1.set_race(protocol::Race::Terran);
-    p1.player_name = Some("yolo in the game".into());
+    p1.player_name = Some("yolo, in the game".into());
 
     let mut p2 = protocol::PlayerSetup::default();
     p2.set_type(protocol::PlayerType::Computer);
@@ -25,9 +25,8 @@ fn local_map(path: impl Into<String>) -> protocol::request_create_game::Map {
     })
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> io::Result<()> {
-    pretty_env_logger::init_timed();
+async fn join_game() -> io::Result<(state_machine::Engine<state_machine::InGame>, Connection)> {
+    use protocol::request_join_game::Participation;
 
     let mut connection = connect("127.0.0.1:8000").await?;
     let state = state_machine::init();
@@ -42,52 +41,80 @@ async fn main() -> io::Result<()> {
         .await?
         .expect("couldn't create game");
 
-    use protocol::request_join_game::Participation;
     let mut join_game = protocol::RequestJoinGame::default();
     join_game.participation = Some(Participation::Race(protocol::Race::Terran as i32));
     join_game.options = Some(protocol::InterfaceOptions {
         raw: Some(true),
         ..Default::default()
     });
+    let state = state.join_game(&mut connection, join_game).await?.unwrap();
+    Ok((state, connection))
+}
 
-    let state = state
-        .join_game(&mut connection, join_game)
-        .await?
-        .expect("couldn't join game");
+#[derive(Default)]
+struct GameState {
+    common: protocol::PlayerCommon,
+    allies: Vec<protocol::Unit>,
+    enemies: Vec<protocol::Unit>,
+}
+
+impl GameState {
+    fn update(&mut self, resp: &protocol::Response) {
+        let protocol::Response { response, .. } = response;
+
+        match response.unwrap() {
+            protocol::response::Response::Observation(obs) => {
+                self.common = obs
+                    .observation
+                    .as_ref()
+                    .and_then(|obs| obs.player_common.clone())
+                    .unwrap();
+
+                let protocol::ObservationRaw { player, units, .. } =
+                    obs.observation.and_then(|obs| obs.raw_data).unwrap();
+
+                self.allies = units
+                    .iter()
+                    .filter(|unit| unit.alliance() == protocol::Alliance::Self_)
+                    .cloned()
+                    .collect();
+                self.enemies = units
+                    .iter()
+                    .filter(|unit| unit.alliance() == protocol::Alliance::Enemy)
+                    .cloned()
+                    .collect();
+            }
+            _ => {}
+        }
+    }
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> io::Result<()> {
+    pretty_env_logger::init_timed();
+    let (state, mut connection) = join_game().await?;
 
     let mut gameloop = state.stream(&mut connection);
     let mut idx = 0;
+
+    let mut gs = GameState::default();
     loop {
-        let request = protocol::RequestObservation {
-            disable_fog: Some(false),
-            game_loop: Some(idx),
-        };
         let mut req = protocol::Request::default();
-        req.id = Some(0);
-        req.request = Some(protocol::request::Request::Observation(request));
+        req.request = Some(protocol::request::Request::Observation(
+            protocol::RequestObservation {
+                disable_fog: Some(false),
+                game_loop: Some(idx),
+            },
+        ));
 
         gameloop.send(req).await?;
-
         let response = match gameloop.next().await {
             Some(futures::future::Either::Right(_)) => break (Ok(())), // game ended
             None => break Err(io::Error::new(io::ErrorKind::Other, "stream ended")),
             Some(futures::future::Either::Left(response)) => response,
         };
 
-        let protocol::Response { response, .. } = response?;
-        use protocol::response;
-        match response.unwrap() {
-            response::Response::Observation(obs) => {
-                let protocol::ObservationRaw { player, units, .. } =
-                    obs.observation.and_then(|obs| obs.raw_data).unwrap();
-                dbg!(player);
-                dbg!(units
-                    .iter()
-                    .filter(|unit| unit.alliance() == protocol::Alliance::Self_)
-                    .collect::<Vec<_>>());
-            }
-            _ => {}
-        }
+        gs.update(&response);
 
         idx += 1;
     }

@@ -17,6 +17,7 @@ macro_rules! state_machine {
             impl $marker for $state {}
             impl $state_machine<$state> {
                 $(
+                    #[allow(dead_code)]
                     pub(crate) fn $method(self) -> $state_machine<$next_state> {
                         $state_machine { _state: ::core::marker::PhantomData }
                     }
