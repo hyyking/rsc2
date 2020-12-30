@@ -155,6 +155,14 @@ pub struct RawUnit {
     pub is_worker: bool,
     pub is_townhall: bool,
 }
+impl crate::ToEnum for RawUnit {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn value(&self) -> &usize {
+        &self.id
+    }
+}
 
 #[derive(Deserialize, Debug)]
 pub struct RawAbility {
@@ -173,12 +181,28 @@ pub struct RawAbility {
     #[serde(skip)]
     pub buff: Vec<()>,
 }
+impl crate::ToEnum for RawAbility {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn value(&self) -> &usize {
+        &self.id
+    }
+}
 
 #[derive(Deserialize, Debug)]
 pub struct RawUpgrade {
     pub id: usize,
     pub name: String,
     pub cost: Cost,
+}
+impl crate::ToEnum for RawUpgrade {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn value(&self) -> &usize {
+        &self.id
+    }
 }
 
 #[derive(Deserialize, Debug)]

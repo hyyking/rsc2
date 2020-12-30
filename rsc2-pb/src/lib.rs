@@ -19,12 +19,21 @@
 #![feature(concat_idents)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-/// Auto-generated protobuf protocol
+/// Generated protobuf protocol
 #[allow(missing_docs)] // TODO: add custom documention for protocol
 pub mod protocol {
     include!(concat!(
         env!("OUT_DIR", "Couldn't find the generated rust-protobuf code"),
         "/sc2api_protocol.rs"
+    ));
+}
+
+/// Generated unit, ability and upgrade ids
+#[allow(missing_docs)]
+pub mod ids {
+    include!(concat!(
+        env!("OUT_DIR", "Couldn't find the generated ids"),
+        "/ids.rs"
     ));
 }
 
