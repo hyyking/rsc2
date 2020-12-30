@@ -3,16 +3,12 @@
 //! Currently implements:
 //!
 //! * Rust code generated from the protobuf api.
-//! * Custom traits and implementations for the generated code.
 //! * Codec to be used alongside a websocket client (uses [`websocket_codec`](crate::websocket_codec)
 //!   under the hood).
 //!
 //! # Features
 //!
-//! * `default`: `encoding` + `rsc2_macro`
-//! * `encoding`: prost message derive on api structs to convert them to bytes
 //! * `codec`: api protobuf encoding/decoding on a stream [dep: `encoding`]
-//! * `rsc2_macro`: custom derives to reduce verbosity of the api
 
 #![warn(
     missing_debug_implementations,
@@ -20,74 +16,140 @@
     rust_2018_idioms,
     unreachable_pub
 )]
+#![feature(concat_idents)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
-mod default;
-
-#[cfg(feature = "codec")]
-#[doc(inline)]
-pub mod codec;
-
-/// rsc2-pb prelude traits
-pub mod prelude;
-
-#[allow(missing_docs)] // TODO: Generate better documentation for this module
-pub mod api {
+/// Auto-generated protobuf protocol
+#[allow(missing_docs)] // TODO: add custom documention for protocol
+pub mod protocol {
     include!(concat!(
         env!("OUT_DIR", "Couldn't find the generated rust-protobuf code"),
         "/sc2api_protocol.rs"
     ));
 }
 
-pub use default::DefaultConfig;
+#[cfg(feature = "codec")]
+#[cfg_attr(docsrs, doc(cfg(feature = "codec")))]
+pub mod codec {
+    //! A `tokio_util::codec` for sc2api websocket protobuf messages
+    use std::{fmt, io};
 
-/// validate a [`Status`](crate::api::Status) variable and variant.
-///
-/// This macro returns a [`io::Result<Status>`](std::io::Result) block.
-///
-/// # Example
-///
-/// ```no_run
-/// use rsc2_pb::{validate_status, api};
-///
-/// fn main() {
-///     // This what the status will look like in a response.
-///     let after_start = Some(api::Status::InGame as i32);
-///     assert!(validate_status!(after_start => api::Status::InGame).is_ok());
-///     assert!(validate_status!(after_start => api::Status::Ended).is_err());
-///
-///     let wrong = Some(99999);
-///     assert!(validate_status!(after_start => api::Status::InGame).is_err());
-///
-///     let empty = None;
-///     assert!(validate_status!(empty => api::Status::Ended).is_err());
-///
-/// }
-/// ```
-#[macro_export]
-macro_rules! validate_status {
-    ($status:expr => $variant:path) => {{
-        use ::core::convert::TryFrom;
-        let status: ::core::option::Option<i32> = $status;
-        let _: ::rsc2_pb::api::Status = $variant;
-        status
-            .ok_or_else(|| {
-                ::std::io::Error::new(
-                    ::std::io::ErrorKind::ConnectionAborted,
-                    "Missing Status Code",
-                )
-            })
-            .and_then(
-                |status| match ::rsc2_pb::api::Status::try_from(status).ok() {
-                    Some($variant) => Ok($variant),
-                    Some(e) => Err(::std::io::Error::new(
-                        ::std::io::ErrorKind::ConnectionAborted,
-                        format!(r#"Unexpected "{:?}""#, e),
-                    )),
-                    None => Err(::std::io::Error::new(
-                        ::std::io::ErrorKind::ConnectionAborted,
-                        "Status code is empty",
-                    )),
-                },
-            )
-    }};
+    use crate::protocol;
+
+    use bytes::BytesMut;
+    use prost::Message as _;
+    use tokio_util::codec::{Decoder, Encoder};
+    use websocket_codec::{Message, MessageCodec};
+
+    /// Client codec to interact with a SC2 instance
+    ///
+    /// This instance keeps track of the request id, custom ids will be overritten.
+    pub struct Codec {
+        id: u32,
+        inner: MessageCodec,
+    }
+
+    impl Codec {
+        /// Returns current request id
+        pub fn id(&self) -> u32 {
+            self.id
+        }
+        /// References the underlying websocket codec
+        pub fn message_codec(&mut self) -> &mut MessageCodec {
+            self.inner
+        }
+    }
+
+    impl fmt::Debug for Codec {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("Codec").field("id", &self.id).finish()
+        }
+    }
+
+    impl From<MessageCodec> for Codec {
+        fn from(inner: MessageCodec) -> Self {
+            Self { id: 0, inner }
+        }
+    }
+
+    impl Decoder for Codec {
+        type Item = protocol::Response;
+        type Error = io::Error;
+        fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+            match self.inner.decode(src) {
+                Ok(Some(message)) => Ok(Some(protocol::Response::decode(message.into_data())?)),
+                Ok(None) => Ok(None),
+                Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+            }
+        }
+    }
+
+    impl Encoder<protocol::Request> for Codec {
+        type Error = io::Error;
+        fn encode(
+            &mut self,
+            item: protocol::Request,
+            dst: &mut BytesMut,
+        ) -> Result<(), Self::Error> {
+            self.id = item.id();
+            let mut buffer = BytesMut::with_capacity(item.encoded_len());
+            item.encode(&mut buffer)?;
+            match self.inner.encode(Message::binary(buffer), dst) {
+                Ok(()) => Ok(()),
+                Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+            }
+        }
+    }
+    macro_rules! impl_req_encoder {
+        {$($variant:ident => $request:ident),+} => {
+            $(
+            impl Encoder<$crate::protocol::$request> for Codec {
+                type Error = io::Error;
+                fn encode(
+                    &mut self,
+                    item: $crate::protocol::$request,
+                    dst: &mut ::bytes::BytesMut,
+                ) -> Result<(), Self::Error> {
+                    self.id = self.id.wrapping_add(1);
+                    let request = $crate::protocol::Request {
+                        id: Some(self.id),
+                        request: Some(
+                            $crate::protocol::request::Request::$variant(item),
+                        ),
+                    };
+                    let mut buffer = ::bytes::BytesMut::with_capacity(request.encoded_len());
+                    request.encode(&mut buffer)?;
+                    match self.inner.encode(Message::binary(buffer), dst) {
+                        Ok(()) => Ok(()),
+                        Err(e) => Err(::std::io::Error::new(::std::io::ErrorKind::InvalidData, e)),
+                    }
+                }
+            }
+            )*
+        };
+    }
+    impl_req_encoder! {
+        CreateGame => RequestCreateGame,
+        JoinGame => RequestJoinGame,
+        RestartGame => RequestRestartGame,
+        StartReplay => RequestStartReplay,
+        LeaveGame => RequestLeaveGame,
+        QuickSave => RequestQuickSave,
+        QuickLoad => RequestQuickLoad,
+        Quit => RequestQuit,
+        GameInfo => RequestGameInfo,
+        Observation => RequestObservation,
+        Action => RequestAction,
+        ObsAction => RequestObserverAction,
+        Step => RequestStep,
+        Data => RequestData,
+        Query => RequestQuery,
+        SaveReplay => RequestSaveReplay,
+        MapCommand => RequestMapCommand,
+        ReplayInfo => RequestReplayInfo,
+        AvailableMaps => RequestAvailableMaps,
+        SaveMap => RequestSaveMap,
+        Ping => RequestPing,
+        Debug => RequestDebug
+    }
 }

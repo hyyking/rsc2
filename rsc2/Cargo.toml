@@ -4,15 +4,13 @@ version = "0.1.0"
 authors = ["hyyking <leoduret@outlook.com>"]
 edition = "2018"
 
-[dependencies]
-rsc2_pb = {path="../rsc2-pb", features=["default", "codec"]}
-rsc2_macro = {path="../rsc2-macro", features=["run"]}
-tokio = {version = "0.2.2", features=["time", "rt-threaded", "tcp", "io-driver"]}
-websocket-lite = {path= "../../rust-websocket-lite/websocket-lite"}
-futures = "0.3.1"
-pin-utils = "0.1.0-alpha.4"
-log = "0.4.8"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[[test]]
-name = "runtime"
-path = "../tests/runtime.rs"
+[dependencies]
+rsc2_pb = {path = "../rsc2-pb", version = "1.0",features=["codec"]}
+futures = {version = "0.3"}
+tokio-util =  {version = "0.6"}
+tokio =  {version = "1", features=["net", "macros", "rt"]}
+websocket-lite = {version = "0.5"}
+log = {version="0.4", features=["max_level_trace"]}
+pretty_env_logger = "0.4"
