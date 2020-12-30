@@ -56,7 +56,7 @@ pub mod codec {
         }
         /// References the underlying websocket codec
         pub fn message_codec(&mut self) -> &mut MessageCodec {
-            self.inner
+            &mut self.inner
         }
     }
 
