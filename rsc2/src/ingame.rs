@@ -2,20 +2,20 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::{
-    state_machine::{Ended, Engine, InGame},
+    state_machine::{Core, Ended, InGame},
     Connection,
 };
 
 use futures::{future::Either, ready, sink::Sink, stream::Stream};
 use rsc2_pb::protocol::{self, Status};
 
-pub struct InGameLoop<'a> {
-    state: Option<Engine<InGame>>,
-    framed: Pin<&'a mut Connection>,
+pub struct InGameLoop<'sm, 'b> {
+    state: Option<InGame<'sm>>,
+    framed: Pin<&'b mut Connection>,
 }
 
-impl<'a> InGameLoop<'a> {
-    pub fn new(state: Engine<InGame>, framed: Pin<&'a mut Connection>) -> Self {
+impl<'sm, 'b> InGameLoop<'sm, 'b> {
+    pub fn new(state: InGame<'sm>, framed: Pin<&'b mut Connection>) -> Self {
         Self {
             state: Some(state),
             framed,
@@ -23,8 +23,8 @@ impl<'a> InGameLoop<'a> {
     }
 }
 
-impl<'a> Stream for InGameLoop<'a> {
-    type Item = Either<<Connection as Stream>::Item, Engine<Ended>>;
+impl<'sm, 'b> Stream for InGameLoop<'sm, 'b> {
+    type Item = Either<<Connection as Stream>::Item, Ended<'sm>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.state.is_none() {
@@ -33,10 +33,10 @@ impl<'a> Stream for InGameLoop<'a> {
 
         let resp = ready!(self.framed.as_mut().poll_next(cx));
         if let Some(Ok(Status::Ended)) = resp.as_ref().map(|r| r.as_ref().map(|r| r.status())) {
-            let res = self
-                .state
-                .take()
-                .map(|state| Either::Right(state.as_ended()));
+            let res = self.state.take().map(|mut state| {
+                state.core().replace(Core::Ended {});
+                Either::Right(Ended::from(state))
+            });
             Poll::Ready(res)
         } else {
             Poll::Ready(resp.map(Either::Left))
@@ -44,7 +44,7 @@ impl<'a> Stream for InGameLoop<'a> {
     }
 }
 
-impl<'a> Sink<protocol::Request> for InGameLoop<'a> {
+impl<'sm, 'b> Sink<protocol::Request> for InGameLoop<'sm, 'b> {
     type Error = <Connection as Sink<protocol::Request>>::Error;
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Sink::<protocol::Request>::poll_ready(self.framed.as_mut(), cx)

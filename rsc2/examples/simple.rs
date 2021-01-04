@@ -1,7 +1,11 @@
 use std::io;
 
 use futures::{SinkExt, StreamExt};
-use rsc2::{connect, protocol, state_machine, Connection};
+use rsc2::{
+    connect, protocol,
+    state_machine::{Core, InGame},
+    Connection,
+};
 
 fn player_setup() -> Vec<protocol::PlayerSetup> {
     let mut p1 = protocol::PlayerSetup::default();
@@ -25,18 +29,19 @@ fn local_map(path: impl Into<String>) -> protocol::request_create_game::Map {
     })
 }
 
-async fn join_game() -> io::Result<(state_machine::Engine<state_machine::InGame>, Connection)> {
+async fn join_game(sm: &mut Core) -> io::Result<(InGame<'_>, Connection)> {
     use protocol::request_join_game::Participation;
 
     let mut connection = connect("127.0.0.1:8000").await?;
-    let state = state_machine::init();
 
     let mut create_game = protocol::RequestCreateGame::default();
     create_game.player_setup = player_setup();
     create_game.map = Some(local_map("KingsCoveLE.SC2Map"));
     create_game.realtime = Some(true);
 
-    let state = state
+    let state = sm
+        .launched()
+        .unwrap()
         .create_game(&mut connection, create_game)
         .await?
         .expect("couldn't create game");
@@ -96,36 +101,42 @@ impl GameState {
             return vec![];
         }
 
-        let mut actions = vec![];
-        for unit in &self.allies {
-            if unit.unit_type != Some(rsc2_pb::ids::UnitId::Scv as u32) {
-                continue;
-            }
-
-            let mut raw = protocol::ActionRaw::default();
-            raw.action = Some(protocol::action_raw::Action::UnitCommand(
-                protocol::ActionRawUnitCommand {
-                    ability_id: Some(rsc2_pb::ids::AbilityId::TauntTaunt as i32),
-                    unit_tags: vec![unit.tag.unwrap()],
-                    queue_command: Some(true),
-                    target: None,
-                },
-            ));
-
-            actions.push(protocol::Action {
-                action_raw: Some(raw),
-                ..Default::default()
+        let scvs: Vec<_> = self
+            .allies
+            .iter()
+            .filter_map(|unit| {
+                if unit.unit_type == Some(rsc2_pb::ids::UnitId::Scv as u32) {
+                    return unit.tag;
+                } else {
+                    None
+                }
             })
-        }
+            .collect();
+
+        let mut raw = protocol::ActionRaw::default();
+        raw.action = Some(protocol::action_raw::Action::UnitCommand(
+            protocol::ActionRawUnitCommand {
+                ability_id: Some(rsc2_pb::ids::AbilityId::TauntTaunt as i32),
+                unit_tags: scvs,
+                queue_command: Some(false),
+                target: None,
+            },
+        ));
+
         self.stepped = true;
-        actions
+
+        vec![protocol::Action {
+            action_raw: Some(raw),
+            ..Default::default()
+        }]
     }
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> io::Result<()> {
     pretty_env_logger::init_timed();
-    let (state, mut connection) = join_game().await?;
+    let mut sm = Core::default();
+    let (state, mut connection) = join_game(&mut sm).await?;
 
     let mut gameloop = state.stream(&mut connection);
     let mut idx = 0;

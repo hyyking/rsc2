@@ -5,137 +5,189 @@ use crate::{ingame::InGameLoop, Connection};
 use futures::{sink::SinkExt, stream::StreamExt};
 use rsc2_pb::protocol::{self, response::Response, Status};
 
-macro_rules! state_machine {
-    (struct $state_machine:ident<S: $marker:ident> { $($state:ident => {$((fn $method:ident -> $next_state:ident)),*}),+}) => {
-        #[derive(Clone, Copy, Eq, PartialEq)]
-        pub struct $state_machine<S: $marker> {
-            _state: ::core::marker::PhantomData<S>,
-        }
-        $(
-            #[derive(Clone, Copy, Eq, PartialEq)]
-            pub struct $state;
-            impl $marker for $state {}
-            impl $state_machine<$state> {
-                $(
-                    #[allow(dead_code)]
-                    pub(crate) fn $method(self) -> $state_machine<$next_state> {
-                        $state_machine { _state: ::core::marker::PhantomData }
-                    }
-                )*
-            }
-        )*
-    }
-}
 macro_rules! server_call {
-    ($framed:ident, $data:ident, $transition:expr, $variant:path) => {{
-        let _: &mut Connection = $framed;
-        $framed.send($data).await?;
-        match $framed.next().await.transpose()? {
-            Some(response) => {
-                let status = response.status();
-                let id = response.id();
-                let $crate::protocol::Response {
-                    response, error, ..
-                } = response;
-                error
-                    .into_iter()
-                    .for_each(|err| warn!("response id: {} | err: {}", id, err));
-                if matches!(status, Status::Quit | Status::Unknown) {
-                    info!("status: {:?}, interupting state machine", status);
-                    return Ok(None);
-                }
-                if let Some($variant(response)) = response {
+    ($conn:ident, $req:ident, $resp:path) => {
+        async {
+            let _: &mut Connection = $conn;
+            $conn.send($req).await?;
+            let res = match $conn.next().await {
+                Some(Ok(res)) => res,
+                Some(Err(err)) => return Err(err),
+                None => return Ok(None),
+            };
+
+            let status = res.status();
+            let id = res.id();
+            let $crate::protocol::Response {
+                response, error, ..
+            } = &res;
+
+            error
+                .iter()
+                .for_each(|err| warn!("response id: {} | err: {}", id, err));
+            if matches!(status, Status::Quit | Status::Unknown) {
+                info!("status: {:?}, interupting state machine", status);
+                return Result::<_, io::Error>::Ok(None);
+            }
+            Ok(match response {
+                Some($resp(response)) => {
                     if response.error.is_some() {
                         error!("response id: {} | err: {:?}", id, response.error());
-                        return Ok(None);
+                        None
+                    } else {
+                        Some(res)
                     }
                 }
-                info!("transitioning to status: {:?}", status);
-                Ok(Some($transition))
-            }
-            None => Ok(None),
+                _ => None,
+            })
         }
-    }};
+    };
 }
 
-#[marker]
-pub trait State {}
+macro_rules! impl_from {
+    ($from:ident -> $to:ident) => {
+        impl<'a> From<$from<'a>> for $to<'a> {
+            #[inline]
+            fn from(rhs: $from<'a>) -> Self {
+                $to(rhs.0)
+            }
+        }
+    };
+}
 
-state_machine!(struct Engine<S: State> {
-    Launched => {
-        (fn as_init_game -> InitGame),
-        (fn as_in_game -> InGame),
-        (fn as_in_replay -> InReplay)
-    },
-    InitGame => {
-        (fn as_in_game -> InGame)
-    },
-    InGame => {
-        (fn as_in_game -> InGame),
-        (fn as_ended -> Ended)
-    },
-    InReplay => {
-        (fn as_in_replay -> InReplay),
-        (fn as_ended -> Ended)
-    },
-    Ended => {
-        (fn as_launched -> Launched),
-        (fn as_ingame -> InGame)
+pub enum Core {
+    Launched {},
+    InitGame {},
+    InGame {},
+    InReplay {},
+    Ended {},
+}
+
+impl Core {
+    pub const fn init() -> Self {
+        Self::Launched {}
     }
-});
-
-type EngineResult<T> = io::Result<Option<Engine<T>>>;
-
-pub fn init() -> Engine<Launched> {
-    Engine {
-        _state: ::core::marker::PhantomData,
+    pub fn launched(&mut self) -> Option<Launched<'_>> {
+        match self {
+            Self::Launched { .. } => Some(Launched::from(self)),
+            _ => None,
+        }
+    }
+    pub fn replace(&mut self, new: Self) -> Self {
+        let (a, b) = (&self, &new);
+        debug_assert!(
+            // Launched
+            matches!((a, b), (Self::Launched { .. }, Self::InitGame { .. }))
+                || matches!((a, b), (Self::Launched { .. }, Self::InGame { .. }))
+                || matches!((a, b), (Self::Launched { .. }, Self::InReplay { .. }))
+                // InitGame
+                || matches!((a, b), (Self::InitGame { .. }, Self::InGame { .. }))
+                // InGame
+                || matches!((a, b), (Self::InGame { .. }, Self::InGame { .. }))
+                || matches!((a, b), (Self::InGame { .. }, Self::Ended { .. }))
+                // InReplay
+                || matches!((a, b), (Self::InReplay { .. }, Self::InReplay { .. }))
+                || matches!((a, b), (Self::InReplay { .. }, Self::Ended { .. }))
+                // Ended
+                || matches!((a, b), (Self::Ended { .. }, Self::Launched { .. }))
+                || matches!((a, b), (Self::Ended { .. }, Self::InGame { .. }))
+        );
+        std::mem::replace(self, new)
+    }
+}
+impl Default for Core {
+    fn default() -> Self {
+        Self::init()
     }
 }
 
-impl Engine<Launched> {
+#[repr(transparent)]
+pub struct Launched<'a>(&'a mut Core);
+impl<'a> From<&'a mut Core> for Launched<'a> {
+    fn from(rhs: &'a mut Core) -> Self {
+        Launched(rhs)
+    }
+}
+
+#[repr(transparent)]
+pub struct InitGame<'a>(&'a mut Core);
+impl_from!(Launched -> InitGame);
+
+#[repr(transparent)]
+pub struct InGame<'a>(&'a mut Core);
+impl_from!(Launched -> InGame);
+impl_from!(InitGame -> InGame);
+
+#[repr(transparent)]
+pub struct InReplay<'a>(&'a mut Core);
+impl_from!(Launched -> InReplay);
+
+#[repr(transparent)]
+pub struct Ended<'a>(&'a mut Core);
+impl_from!(InGame -> Ended);
+impl_from!(InReplay -> Ended);
+
+impl<'a> Launched<'a> {
+    pub fn core(&mut self) -> &mut Core {
+        self.0
+    }
     pub async fn create_game(
         self,
         framed: &mut Connection,
         data: protocol::RequestCreateGame,
-    ) -> EngineResult<InitGame> {
-        server_call!(framed, data, self.as_init_game(), Response::CreateGame)
+    ) -> io::Result<Option<InitGame<'a>>> {
+        let resp = server_call!(framed, data, Response::CreateGame).await?;
+        Ok(resp.map(|_| {
+            self.0.replace(Core::InitGame {});
+            InitGame::from(self)
+        }))
     }
     pub async fn join_game(
         self,
         framed: &mut Connection,
         data: protocol::RequestJoinGame,
-    ) -> EngineResult<InGame> {
-        server_call!(framed, data, self.as_in_game(), Response::JoinGame)
+    ) -> io::Result<Option<InGame<'a>>> {
+        let resp = server_call!(framed, data, Response::JoinGame).await?;
+        Ok(resp.map(|_| {
+            self.0.replace(Core::InGame {});
+            InGame::from(self)
+        }))
     }
     pub async fn join_replay(
         self,
         framed: &mut Connection,
         data: protocol::RequestStartReplay,
-    ) -> EngineResult<InReplay> {
-        server_call!(framed, data, self.as_in_replay(), Response::StartReplay)
+    ) -> io::Result<Option<InReplay<'a>>> {
+        let resp = server_call!(framed, data, Response::StartReplay).await?;
+        Ok(resp.map(|_| {
+            self.0.replace(Core::InReplay {});
+            InReplay::from(self)
+        }))
     }
 }
-impl Engine<InitGame> {
+impl<'a> InitGame<'a> {
+    pub fn core(&mut self) -> &mut Core {
+        self.0
+    }
     pub async fn join_game(
         self,
         framed: &mut Connection,
         data: protocol::RequestJoinGame,
-    ) -> EngineResult<InGame> {
-        server_call!(framed, data, self.as_in_game(), Response::JoinGame)
+    ) -> io::Result<Option<InGame<'a>>> {
+        let resp = server_call!(framed, data, Response::JoinGame).await?;
+        Ok(resp.map(|_| {
+            self.0.replace(Core::InGame {});
+            InGame::from(self)
+        }))
     }
 }
 
-impl Engine<InGame> {
-    pub fn stream(self, stream: &mut Connection) -> InGameLoop<'_> {
+impl<'a> InGame<'a> {
+    pub fn core(&mut self) -> &mut Core {
+        self.0
+    }
+    pub fn stream(self, stream: &mut Connection) -> InGameLoop<'a, '_> {
         let framed = unsafe { std::pin::Pin::new_unchecked(stream) };
         InGameLoop::new(self, framed)
-    }
-}
-impl Engine<InReplay> {}
-impl Engine<Ended> {}
-
-impl std::process::Termination for Engine<Ended> {
-    fn report(self) -> i32 {
-        0
     }
 }
