@@ -10,7 +10,7 @@ edition = "2018"
 rsc2_pb = { path = "../rsc2-pb", version = "1.0", features = ["codec"] }
 futures = { version = "0.3" }
 tokio-util = { version = "0.7" }
-tokio = { version = "1", features = ["net", "macros", "rt"] }
+tokio = { version = "1", features = ["net", "macros", "rt", "time"] }
 websocket-lite = { version = "0.5" }
 log = { version = "0.4", features = ["max_level_trace"] }
 pretty_env_logger = "0.4"

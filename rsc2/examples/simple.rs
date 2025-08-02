@@ -1,11 +1,13 @@
-use std::io;
+use std::{io, time::Duration};
 
 use futures::{SinkExt, StreamExt};
+use log::info;
 use rsc2::{
     connect, protocol,
     state_machine::{Core, InGame},
     Connection,
 };
+use tokio::time;
 
 fn player_setup() -> Vec<protocol::PlayerSetup> {
     let mut p1 = protocol::PlayerSetup::default();
@@ -17,7 +19,7 @@ fn player_setup() -> Vec<protocol::PlayerSetup> {
     p2.set_type(protocol::PlayerType::Computer);
     p2.set_race(protocol::Race::Terran);
     p2.set_difficulty(protocol::Difficulty::Easy);
-    p2.player_name = Some("brainful cheese dip".into());
+    p2.player_name = Some("sentient cheese dip".into());
 
     vec![p1, p2]
 }
@@ -27,6 +29,8 @@ fn local_map(path: impl Into<String>) -> protocol::request_create_game::Map {
         map_path: Some(path.into()),
         map_data: None,
     })
+
+    // protocol::request_create_game::Map::
 }
 
 async fn join_game(sm: &mut Core) -> io::Result<(InGame<'_>, Connection)> {
@@ -36,7 +40,9 @@ async fn join_game(sm: &mut Core) -> io::Result<(InGame<'_>, Connection)> {
 
     let mut create_game = protocol::RequestCreateGame::default();
     create_game.player_setup = player_setup();
-    create_game.map = Some(local_map("KingsCoveLE.SC2Map"));
+    create_game.map = Some(local_map(
+        r"C:\Program Files (x86)\StarCraft II\Maps\EphemeronLE.SC2Map",
+    ));
     create_game.realtime = Some(true);
 
     let state = sm
@@ -61,6 +67,7 @@ struct GameState {
     common: protocol::PlayerCommon,
     allies: Vec<protocol::Unit>,
     enemies: Vec<protocol::Unit>,
+    start_location: Option<protocol::Point2D>,
     stepped: bool,
 }
 
@@ -113,28 +120,37 @@ impl GameState {
             })
             .collect();
 
-        let mut raw = protocol::ActionRaw::default();
-        raw.action = Some(protocol::action_raw::Action::UnitCommand(
-            protocol::ActionRawUnitCommand {
-                ability_id: Some(2),
-                unit_tags: scvs,
-                queue_command: Some(false),
-                target: None,
-            },
-        ));
-
-        self.stepped = true;
-
-        vec![protocol::Action {
-            action_raw: Some(raw),
-            ..Default::default()
-        }]
+        if let Some(start_location) = self.start_location.clone() {
+            let mut raw = protocol::ActionRaw::default();
+            raw.action = Some(protocol::action_raw::Action::UnitCommand(
+                protocol::ActionRawUnitCommand {
+                    ability_id: Some(23),
+                    unit_tags: scvs,
+                    queue_command: Some(false),
+                    target: Some(
+                        protocol::action_raw_unit_command::Target::TargetWorldSpacePos(
+                            start_location,
+                        ),
+                    ),
+                },
+            ));
+            self.stepped = true;
+            vec![protocol::Action {
+                action_raw: Some(raw),
+                ..Default::default()
+            }]
+        } else {
+            vec![]
+        }
     }
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> io::Result<()> {
+    std::env::set_var("RUST_LOG", "info");
+
     pretty_env_logger::init_timed();
+
     let mut sm = Core::default();
     let (state, mut connection) = join_game(&mut sm).await?;
 
@@ -142,12 +158,46 @@ async fn main() -> io::Result<()> {
     let mut idx = 0;
 
     let mut gs = GameState::default();
+
     loop {
+        if idx >= 3 {
+            break Ok(());
+        }
+        dbg!(idx);
+        if idx == 0 {
+            info!("Requesting observation");
+            let mut req = protocol::Request::default();
+            req.request = Some(protocol::request::Request::GameInfo(
+                protocol::RequestGameInfo {},
+            ));
+            gameloop.send(req).await?;
+            let response = match gameloop.next().await {
+                Some(futures::future::Either::Right(_)) => break Ok(()), // game ended
+                None => break Err(io::Error::new(io::ErrorKind::Other, "stream ended")),
+                Some(futures::future::Either::Left(response)) => response,
+            }?;
+
+            if let Some(protocol::response::Response::GameInfo(protocol::ResponseGameInfo {
+                start_raw:
+                    Some(protocol::StartRaw {
+                        ref start_locations,
+                        ..
+                    }),
+                ..
+            })) = response.response
+            {
+                gs.start_location = Some(start_locations[0].clone());
+            }
+
+            time::sleep(Duration::from_secs(4)).await;
+        }
+
+        info!("Requesting observation");
         let mut req = protocol::Request::default();
         req.request = Some(protocol::request::Request::Observation(
             protocol::RequestObservation {
                 disable_fog: Some(false),
-                game_loop: Some(idx),
+                game_loop: None, //Some(idx),
             },
         ));
 
@@ -158,19 +208,22 @@ async fn main() -> io::Result<()> {
             Some(futures::future::Either::Left(response)) => response,
         }?;
 
-        if let Some(protocol::response::Response::Action(ref action)) = response.response {
-            dbg!(action.result().collect::<Vec<_>>());
-        }
         gs.update(&response);
 
-        let mut req = protocol::Request::default();
-        req.request = Some(protocol::request::Request::Action(
-            protocol::RequestAction {
-                actions: gs.on_step(),
-            },
-        ));
+        let actions = gs.on_step();
 
-        gameloop.send(req).await?;
+        if !actions.is_empty() {
+            let mut req = protocol::Request::default();
+            req.request = Some(protocol::request::Request::Action(
+                protocol::RequestAction { actions },
+            ));
+
+            info!("Sending action");
+            dbg!(&req);
+
+            gameloop.send(req).await?;
+        }
+
         idx += 1;
     }
 }
