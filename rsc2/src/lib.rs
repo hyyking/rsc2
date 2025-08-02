@@ -1,5 +1,3 @@
-#![feature(marker_trait_attr, termination_trait_lib)]
-
 #[macro_use]
 extern crate log;
 

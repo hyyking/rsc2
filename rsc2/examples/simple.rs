@@ -105,7 +105,7 @@ impl GameState {
             .allies
             .iter()
             .filter_map(|unit| {
-                if unit.unit_type == Some(rsc2_pb::ids::UnitId::Scv as u32) {
+                if unit.unit_type == Some(45) {
                     return unit.tag;
                 } else {
                     None
@@ -116,7 +116,7 @@ impl GameState {
         let mut raw = protocol::ActionRaw::default();
         raw.action = Some(protocol::action_raw::Action::UnitCommand(
             protocol::ActionRawUnitCommand {
-                ability_id: Some(rsc2_pb::ids::AbilityId::TauntTaunt as i32),
+                ability_id: Some(2),
                 unit_tags: scvs,
                 queue_command: Some(false),
                 target: None,
@@ -153,7 +153,7 @@ async fn main() -> io::Result<()> {
 
         gameloop.send(req).await?;
         let response = match gameloop.next().await {
-            Some(futures::future::Either::Right(_)) => break (Ok(())), // game ended
+            Some(futures::future::Either::Right(_)) => break Ok(()), // game ended
             None => break Err(io::Error::new(io::ErrorKind::Other, "stream ended")),
             Some(futures::future::Either::Left(response)) => response,
         }?;

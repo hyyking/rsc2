@@ -16,7 +16,6 @@
     rust_2018_idioms,
     unreachable_pub
 )]
-#![feature(concat_idents)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 /// Generated protobuf protocol
@@ -25,15 +24,6 @@ pub mod protocol {
     include!(concat!(
         env!("OUT_DIR", "Couldn't find the generated rust-protobuf code"),
         "/sc2api_protocol.rs"
-    ));
-}
-
-/// Generated unit, ability and upgrade ids
-#[allow(missing_docs)]
-pub mod ids {
-    include!(concat!(
-        env!("OUT_DIR", "Couldn't find the generated ids"),
-        "/ids.rs"
     ));
 }
 
