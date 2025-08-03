@@ -10,12 +10,7 @@
 //!
 //! * `codec`: api protobuf encoding/decoding on a stream [dep: `encoding`]
 
-#![warn(
-    missing_debug_implementations,
-    missing_docs,
-    rust_2018_idioms,
-    unreachable_pub
-)]
+#![warn(missing_debug_implementations, missing_docs, unreachable_pub)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 /// Generated protobuf protocol
@@ -43,12 +38,12 @@ pub mod codec {
     /// Client codec to interact with a SC2 instance
     ///
     /// This instance keeps track of the request id, custom ids will be overritten.
-    pub struct Codec {
+    pub struct S2Codec {
         id: u32,
         inner: MessageCodec,
     }
 
-    impl Codec {
+    impl S2Codec {
         /// Returns current request id
         pub fn id(&self) -> u32 {
             self.id
@@ -59,19 +54,19 @@ pub mod codec {
         }
     }
 
-    impl fmt::Debug for Codec {
+    impl fmt::Debug for S2Codec {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.debug_struct("Codec").field("id", &self.id).finish()
         }
     }
 
-    impl From<MessageCodec> for Codec {
+    impl From<MessageCodec> for S2Codec {
         fn from(inner: MessageCodec) -> Self {
             Self { id: 0, inner }
         }
     }
 
-    impl Decoder for Codec {
+    impl Decoder for S2Codec {
         type Item = protocol::Response;
         type Error = io::Error;
         fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
@@ -83,7 +78,7 @@ pub mod codec {
         }
     }
 
-    impl Encoder<protocol::Request> for Codec {
+    impl Encoder<protocol::Request> for S2Codec {
         type Error = io::Error;
         fn encode(
             &mut self,
@@ -102,7 +97,7 @@ pub mod codec {
     macro_rules! impl_req_encoder {
         {$($variant:ident => $request:ident),+} => {
             $(
-            impl Encoder<$crate::protocol::$request> for Codec {
+            impl Encoder<$crate::protocol::$request> for S2Codec {
                 type Error = io::Error;
                 fn encode(
                     &mut self,

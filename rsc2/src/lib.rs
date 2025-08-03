@@ -3,16 +3,17 @@ extern crate log;
 
 mod ingame;
 
+pub mod prelude;
 pub mod state_machine;
 pub use rsc2_pb::protocol;
 
 use std::io;
 
-use rsc2_pb::codec::Codec;
+use rsc2_pb::codec::S2Codec;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
-pub type Connection = Framed<TcpStream, Codec>;
+pub type Connection = Framed<TcpStream, S2Codec>;
 
 pub async fn connect(addr: impl std::net::ToSocketAddrs) -> io::Result<Connection> {
     use tokio_util::codec::FramedParts;
@@ -33,7 +34,9 @@ pub async fn connect(addr: impl std::net::ToSocketAddrs) -> io::Result<Connectio
                 let FramedParts { io, codec, .. } = framed.into_parts();
                 Ok(Framed::from_parts(FramedParts::new::<
                     rsc2_pb::protocol::Request,
-                >(io, Codec::from(codec))))
+                >(
+                    io, S2Codec::from(codec)
+                )))
             }
             Err(e) => Err(io::Error::new(io::ErrorKind::ConnectionRefused, e)),
         },

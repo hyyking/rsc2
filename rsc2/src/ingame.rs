@@ -1,46 +1,64 @@
+use std::convert::identity;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::{
-    state_machine::{Core, Ended, InGame},
     Connection,
+    state_machine::{Core, Ended, InGame},
 };
+use either::Either;
 
-use futures::{future::Either, ready, sink::Sink, stream::Stream};
+use futures::{ready, sink::Sink, stream::Stream};
 use rsc2_pb::protocol::{self, Status};
 
 pub struct InGameLoop<'sm, 'b> {
-    state: Option<InGame<'sm>>,
+    state: Either<Option<InGame<'sm>>, Ended<'sm>>,
     framed: Pin<&'b mut Connection>,
 }
 
 impl<'sm, 'b> InGameLoop<'sm, 'b> {
     pub fn new(state: InGame<'sm>, framed: Pin<&'b mut Connection>) -> Self {
         Self {
-            state: Some(state),
+            state: Either::Left(Some(state)),
             framed,
         }
     }
 }
 
 impl<'sm, 'b> Stream for InGameLoop<'sm, 'b> {
-    type Item = Either<<Connection as Stream>::Item, Ended<'sm>>;
+    type Item = <Connection as Stream>::Item;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.state.is_none() {
+        if self.state.is_right() {
             return Poll::Ready(None);
         }
 
-        let resp = ready!(self.framed.as_mut().poll_next(cx));
-        if let Some(Ok(Status::Ended)) = resp.as_ref().map(|r| r.as_ref().map(|r| r.status())) {
-            let res = self.state.take().map(|mut state| {
-                state.core().replace(Core::Ended {});
-                Either::Right(Ended::from(state))
-            });
-            Poll::Ready(res)
-        } else {
-            Poll::Ready(resp.map(Either::Left))
+        let response: Option<Result<protocol::Response, std::io::Error>> =
+            ready!(self.framed.as_mut().poll_next(cx));
+
+        let match_ended = response.as_ref().is_some_and(|ok| {
+            matches!(
+                ok.as_ref().map(protocol::Response::status),
+                Ok(Status::Ended)
+            )
+        });
+        if match_ended {
+            let state = std::mem::replace(&mut self.state, Either::Left(None));
+
+            let ended = state.either(
+                |ingame| {
+                    let mut ingame = ingame.expect("In game state was expected");
+                    ingame.core().replace(Core::Ended {});
+                    Ended::from(ingame)
+                },
+                identity,
+            );
+            self.state = Either::Right(ended);
+
+            return Poll::Ready(None);
         }
+
+        Poll::Ready(response)
     }
 }
 

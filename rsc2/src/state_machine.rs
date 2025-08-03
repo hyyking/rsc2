@@ -95,6 +95,7 @@ impl Core {
         std::mem::replace(self, new)
     }
 }
+
 impl Default for Core {
     fn default() -> Self {
         Self::init()
