@@ -13,7 +13,6 @@ use tokio::time;
 struct GameState {
     common: protocol::PlayerCommon,
     allies: Vec<protocol::Unit>,
-    enemies: Vec<protocol::Unit>,
     start_location: Option<protocol::Point2D>,
     stepped: bool,
 }
@@ -39,11 +38,6 @@ impl GameState {
                 self.allies = units
                     .iter()
                     .filter(|unit| unit.alliance() == protocol::Alliance::Self_)
-                    .cloned()
-                    .collect();
-                self.enemies = units
-                    .iter()
-                    .filter(|unit| unit.alliance() == protocol::Alliance::Enemy)
                     .cloned()
                     .collect();
             }
@@ -115,13 +109,11 @@ async fn main() -> io::Result<()> {
 
     let mut gs = GameState::default();
 
-    loop {
-        if idx >= 3 {
-            break Ok(());
-        }
+    let _state = loop {
+        log::trace!("Game loop iteration {idx}");
 
         if idx == 0 {
-            info!("Requesting observation");
+            info!("Requesting info");
             let mut req = protocol::Request::default();
             req.request = Some(protocol::request::Request::GameInfo(
                 protocol::RequestGameInfo {},
@@ -130,7 +122,7 @@ async fn main() -> io::Result<()> {
             let response = match gameloop.next().await {
                 Some(Ok(result)) => result,
                 Some(Err(error)) => break Err(error),
-                None => break Ok(()),
+                None => break Ok(gameloop.into_ended()),
             };
 
             if let Some(protocol::response::Response::GameInfo(protocol::ResponseGameInfo {
@@ -145,7 +137,8 @@ async fn main() -> io::Result<()> {
                 gs.start_location = Some(start_locations[0].clone());
             }
 
-            time::sleep(Duration::from_secs(4)).await;
+            // start timer
+            time::sleep(Duration::from_secs(3)).await;
         }
 
         info!("Requesting observation");
@@ -161,7 +154,7 @@ async fn main() -> io::Result<()> {
         let response = match gameloop.next().await {
             Some(Ok(result)) => result,
             Some(Err(error)) => break Err(error),
-            None => break Ok(()),
+            None => break Ok(gameloop.into_ended()),
         };
 
         gs.update(&response);
@@ -179,5 +172,8 @@ async fn main() -> io::Result<()> {
         }
 
         idx += 1;
-    }
+    }?;
+    log::info!("Game loop finished gracefully after {} iterations", idx);
+
+    Ok(())
 }

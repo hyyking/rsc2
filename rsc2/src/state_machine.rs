@@ -1,9 +1,9 @@
 use std::io;
 
-use crate::{ingame::InGameLoop, Connection};
+use crate::{Connection, ingame::InGameListener};
 
 use futures::{sink::SinkExt, stream::StreamExt};
-use rsc2_pb::protocol::{self, response::Response, Status};
+use rsc2_pb::protocol::{self, Status, response::Response};
 
 macro_rules! server_call {
     ($conn:ident, $req:ident, $resp:path) => {
@@ -187,8 +187,8 @@ impl<'a> InGame<'a> {
     pub fn core(&mut self) -> &mut Core {
         self.0
     }
-    pub fn stream(self, stream: &mut Connection) -> InGameLoop<'a, '_> {
+    pub fn stream(self, stream: &mut Connection) -> InGameListener<'a, '_> {
         let framed = unsafe { std::pin::Pin::new_unchecked(stream) };
-        InGameLoop::new(self, framed)
+        InGameListener::new(self, framed)
     }
 }

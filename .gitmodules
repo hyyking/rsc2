@@ -1,7 +1,3 @@
 [submodule "rsc2-pb/s2client-proto"]
 	path = rsc2-pb/s2client-proto
 	url = https://github.com/Blizzard/s2client-proto.git
-
-# [submodule "rsc2-data/sc2-techtree"]
-# 	path = rsc2-data/sc2-techtree
-# 	url = git@github.com:BurnySc2/sc2-techtree.git

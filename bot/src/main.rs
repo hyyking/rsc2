@@ -3,67 +3,16 @@ use std::{io, time::Duration};
 use futures::{SinkExt, StreamExt};
 use log::info;
 use rsc2::{
-    Connection, connect, protocol,
-    state_machine::{Core, InGame},
+    prelude::{Difficulty, Player, Race, create_game},
+    protocol,
+    state_machine::Core,
 };
 use tokio::time;
-
-fn player_setup() -> Vec<protocol::PlayerSetup> {
-    let mut p1 = protocol::PlayerSetup::default();
-    p1.set_type(protocol::PlayerType::Participant);
-    p1.set_race(protocol::Race::Terran);
-    p1.player_name = Some("yolo, in the game".into());
-
-    let mut p2 = protocol::PlayerSetup::default();
-    p2.set_type(protocol::PlayerType::Computer);
-    p2.set_race(protocol::Race::Terran);
-    p2.set_difficulty(protocol::Difficulty::Easy);
-    p2.player_name = Some("sentient cheese dip".into());
-
-    vec![p1, p2]
-}
-
-fn local_map(path: impl Into<String>) -> protocol::request_create_game::Map {
-    protocol::request_create_game::Map::LocalMap(protocol::LocalMap {
-        map_path: Some(path.into()),
-        map_data: None,
-    })
-}
-
-async fn join_game(sm: &mut Core) -> io::Result<(InGame<'_>, Connection)> {
-    use protocol::request_join_game::Participation;
-
-    let mut connection = connect("127.0.0.1:8000").await?;
-
-    let mut create_game = protocol::RequestCreateGame::default();
-    create_game.player_setup = player_setup();
-    create_game.map = Some(local_map(
-        r"C:\Program Files (x86)\StarCraft II\Maps\EphemeronLE.SC2Map",
-    ));
-    create_game.realtime = Some(true);
-
-    let state = sm
-        .launched()
-        .unwrap()
-        .create_game(&mut connection, create_game)
-        .await?
-        .expect("couldn't create game");
-
-    let mut join_game = protocol::RequestJoinGame::default();
-    join_game.participation = Some(Participation::Race(protocol::Race::Terran as i32));
-    join_game.options = Some(protocol::InterfaceOptions {
-        raw: Some(true),
-        ..Default::default()
-    });
-    let state = state.join_game(&mut connection, join_game).await?.unwrap();
-    Ok((state, connection))
-}
 
 #[derive(Default)]
 struct GameState {
     common: protocol::PlayerCommon,
     allies: Vec<protocol::Unit>,
-    enemies: Vec<protocol::Unit>,
     start_location: Option<protocol::Point2D>,
     stepped: bool,
 }
@@ -89,11 +38,6 @@ impl GameState {
                 self.allies = units
                     .iter()
                     .filter(|unit| unit.alliance() == protocol::Alliance::Self_)
-                    .cloned()
-                    .collect();
-                self.enemies = units
-                    .iter()
-                    .filter(|unit| unit.alliance() == protocol::Alliance::Enemy)
                     .cloned()
                     .collect();
             }
@@ -144,34 +88,42 @@ impl GameState {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> io::Result<()> {
-    unsafe { std::env::set_var("RUST_LOG", "info") };
     pretty_env_logger::init_timed();
 
     let mut sm = Core::default();
-    let (state, mut connection) = join_game(&mut sm).await?;
+
+    let (state, mut connection) = create_game(
+        &mut sm,
+        "127.0.0.1:8000",
+        [
+            Player::participant("yolo, in the game", Race::Terran),
+            Player::bot("sentient cheese dip", Race::Zerg, Difficulty::Easy),
+        ],
+        r"C:\Program Files (x86)\StarCraft II\Maps\EphemeronLE.SC2Map",
+        true,
+    )
+    .await?;
 
     let mut gameloop = state.stream(&mut connection);
     let mut idx = 0;
 
     let mut gs = GameState::default();
 
-    loop {
-        if idx >= 3 {
-            break Ok(());
-        }
-        dbg!(idx);
+    let _state = loop {
+        log::trace!("Game loop iteration {idx}");
+
         if idx == 0 {
-            info!("Requesting observation");
+            info!("Requesting info");
             let mut req = protocol::Request::default();
             req.request = Some(protocol::request::Request::GameInfo(
                 protocol::RequestGameInfo {},
             ));
             gameloop.send(req).await?;
             let response = match gameloop.next().await {
-                Some(futures::future::Either::Right(_)) => break Ok(()), // game ended
-                None => break Err(io::Error::new(io::ErrorKind::Other, "stream ended")),
-                Some(futures::future::Either::Left(response)) => response,
-            }?;
+                Some(Ok(result)) => result,
+                Some(Err(error)) => break Err(error),
+                None => break Ok(gameloop.into_ended()),
+            };
 
             if let Some(protocol::response::Response::GameInfo(protocol::ResponseGameInfo {
                 start_raw:
@@ -185,7 +137,8 @@ async fn main() -> io::Result<()> {
                 gs.start_location = Some(start_locations[0].clone());
             }
 
-            time::sleep(Duration::from_secs(4)).await;
+            // start timer
+            time::sleep(Duration::from_secs(3)).await;
         }
 
         info!("Requesting observation");
@@ -199,10 +152,10 @@ async fn main() -> io::Result<()> {
 
         gameloop.send(req).await?;
         let response = match gameloop.next().await {
-            Some(futures::future::Either::Right(_)) => break Ok(()), // game ended
-            None => break Err(io::Error::new(io::ErrorKind::Other, "stream ended")),
-            Some(futures::future::Either::Left(response)) => response,
-        }?;
+            Some(Ok(result)) => result,
+            Some(Err(error)) => break Err(error),
+            None => break Ok(gameloop.into_ended()),
+        };
 
         gs.update(&response);
 
@@ -215,11 +168,12 @@ async fn main() -> io::Result<()> {
             ));
 
             info!("Sending action");
-            dbg!(&req);
-
             gameloop.send(req).await?;
         }
 
         idx += 1;
-    }
+    }?;
+    log::info!("Game loop finished gracefully after {} iterations", idx);
+
+    Ok(())
 }
