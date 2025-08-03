@@ -1,4 +1,4 @@
-use std::{io, time::Duration};
+use std::{io, sync::Arc, time::Duration};
 
 use futures::{SinkExt, StreamExt};
 use log::info;
@@ -7,82 +7,126 @@ use rsc2::{
     protocol,
     state_machine::Core,
 };
-use tokio::time;
+use surrealdb::{
+    RecordId, Surreal,
+    engine::remote::ws::{Client, Ws},
+};
 
-#[derive(Default)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Position {
+    pub id: RecordId,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub as_of: time::OffsetDateTime,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HasPosition {
+    #[serde(rename = "in")]
+    unit: RecordId,
+    #[serde(rename = "out")]
+    position: RecordId,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Unit {
+    pub id: RecordId,
+    pub unit_type: u32,
+}
+
 struct GameState {
-    common: protocol::PlayerCommon,
-    allies: Vec<protocol::Unit>,
-    start_location: Option<protocol::Point2D>,
-    stepped: bool,
+    store: Arc<Surreal<Client>>,
 }
 
 impl GameState {
-    fn update(&mut self, response: &protocol::Response) {
-        let protocol::Response { response, .. } = response;
-
-        match response.as_ref().unwrap() {
-            protocol::response::Response::Observation(obs) => {
-                self.common = obs
-                    .observation
-                    .as_ref()
-                    .and_then(|obs| obs.player_common.clone())
-                    .unwrap();
-
-                let protocol::ObservationRaw { units, .. } = obs
-                    .observation
-                    .as_ref()
-                    .and_then(|obs| obs.raw_data.as_ref())
-                    .unwrap();
-
-                self.allies = units
-                    .iter()
-                    .filter(|unit| unit.alliance() == protocol::Alliance::Self_)
-                    .cloned()
-                    .collect();
-            }
-            _ => {}
-        }
+    async fn new() -> Self {
+        let store = Surreal::new::<Ws>("localhost:8001")
+            .await
+            .expect("Failed to connect to SurrealDB");
+        store
+            .use_ns("sc2bot")
+            .use_db("test")
+            .await
+            .expect("Failed to use namespace and database");
+        let store = Arc::new(store);
+        Self { store }
     }
-    fn on_step(&mut self) -> Vec<protocol::Action> {
-        if self.stepped {
-            return vec![];
-        }
 
-        let scvs: Vec<_> = self
-            .allies
-            .iter()
-            .filter_map(|unit| {
-                if unit.unit_type == Some(45) {
-                    return unit.tag;
-                } else {
-                    None
-                }
+    async fn update(&mut self, response: &protocol::Response) {
+        let protocol::Response {
+            response: Some(protocol::response::Response::Observation(obs)),
+            ..
+        } = response
+        else {
+            log::trace!("Received non-observation response");
+            return;
+        };
+
+        let protocol::ObservationRaw { units, .. } = obs
+            .observation
+            .as_ref()
+            .and_then(|obs| obs.raw_data.as_ref())
+            .unwrap();
+
+        let (unit_data, (position_data, has_position)): (
+            Vec<Unit>,
+            (Vec<Position>, Vec<HasPosition>),
+        ) = units
+            .into_iter()
+            .map(|unit| {
+                let unit_id = RecordId::from(("unit", unit.tag() as i64));
+                let unit_type = unit.unit_type();
+                let unit_data = Unit {
+                    id: unit_id.clone(),
+                    unit_type,
+                };
+
+                let position_id = RecordId::from(("position", surrealdb::Uuid::new_v4()));
+                let position_data = Position {
+                    id: position_id.clone(),
+                    x: unit.pos.as_ref().and_then(|p| p.x).unwrap_or(0.0),
+                    y: unit.pos.as_ref().and_then(|p| p.y).unwrap_or(0.0),
+                    z: unit.pos.as_ref().and_then(|p| p.z).unwrap_or(0.0),
+                    as_of: time::OffsetDateTime::now_utc(),
+                };
+
+                let has_position = HasPosition {
+                    unit: unit_id.clone(),
+                    position: position_id.clone(),
+                };
+                (unit_data, (position_data, has_position))
             })
-            .collect();
+            .unzip();
 
-        if let Some(start_location) = self.start_location.clone() {
-            let mut raw = protocol::ActionRaw::default();
-            raw.action = Some(protocol::action_raw::Action::UnitCommand(
-                protocol::ActionRawUnitCommand {
-                    ability_id: Some(23),
-                    unit_tags: scvs,
-                    queue_command: Some(false),
-                    target: Some(
-                        protocol::action_raw_unit_command::Target::TargetWorldSpacePos(
-                            start_location,
-                        ),
-                    ),
-                },
-            ));
-            self.stepped = true;
-            vec![protocol::Action {
-                action_raw: Some(raw),
-                ..Default::default()
-            }]
-        } else {
-            vec![]
-        }
+        let unitset = tokio::task::JoinSet::from_iter(unit_data.into_iter().map(|unit| {
+            let store = Arc::clone(&self.store);
+            tokio::task::spawn(async move {
+                let _: Option<Unit> = store.upsert(unit.id.clone()).content(unit).await.unwrap();
+            })
+        }));
+
+        let _: Vec<Position> = self
+            .store
+            .insert("position")
+            .content(position_data)
+            .await
+            .expect("Failed to upsert positions in SurrealDB");
+
+        let _: Vec<HasPosition> = self
+            .store
+            .insert("has_position")
+            .relation(has_position)
+            .await
+            .expect("Failed to upsert HasPosition in SurrealDB");
+
+        unitset.join_all().await;
+    }
+
+    async fn on_step(&mut self) -> Vec<protocol::Action> {
+        vec![]
     }
 }
 
@@ -90,7 +134,27 @@ impl GameState {
 async fn main() -> io::Result<()> {
     pretty_env_logger::init_timed();
 
-    let mut sm = Core::default();
+    let mut gs = GameState::new().await;
+    log::info!("Game state connection initialized");
+
+    gs.store
+        .query("DEFINE TABLE unit SCHEMALESS;")
+        .await
+        .unwrap();
+
+    gs.store
+        .query("DEFINE TABLE position SCHEMALESS;")
+        .await
+        .unwrap();
+
+    gs.store
+        .query("DEFINE TABLE has_position TYPE RELATION IN unit OUT position SCHEMALESS")
+        .await
+        .unwrap();
+
+    log::info!("SurrealDB tables defined");
+
+    let mut sm = Core::init();
 
     let (state, mut connection) = create_game(
         &mut sm,
@@ -107,39 +171,14 @@ async fn main() -> io::Result<()> {
     let mut gameloop = state.stream(&mut connection);
     let mut idx = 0;
 
-    let mut gs = GameState::default();
-
     let _state = loop {
         log::trace!("Game loop iteration {idx}");
 
         if idx == 0 {
-            info!("Requesting info");
-            let mut req = protocol::Request::default();
-            req.request = Some(protocol::request::Request::GameInfo(
-                protocol::RequestGameInfo {},
-            ));
-            gameloop.send(req).await?;
-            let response = match gameloop.next().await {
-                Some(Ok(result)) => result,
-                Some(Err(error)) => break Err(error),
-                None => break Ok(gameloop.into_ended()),
-            };
-
-            if let Some(protocol::response::Response::GameInfo(protocol::ResponseGameInfo {
-                start_raw:
-                    Some(protocol::StartRaw {
-                        ref start_locations,
-                        ..
-                    }),
-                ..
-            })) = response.response
-            {
-                gs.start_location = Some(start_locations[0].clone());
-            }
-
-            // start timer
-            time::sleep(Duration::from_secs(3)).await;
+            // wait for game to start
+            tokio::time::sleep(Duration::from_secs(3)).await;
         }
+        tokio::time::sleep(Duration::from_millis(500)).await;
 
         info!("Requesting observation");
         let mut req = protocol::Request::default();
@@ -157,19 +196,7 @@ async fn main() -> io::Result<()> {
             None => break Ok(gameloop.into_ended()),
         };
 
-        gs.update(&response);
-
-        let actions = gs.on_step();
-
-        if !actions.is_empty() {
-            let mut req = protocol::Request::default();
-            req.request = Some(protocol::request::Request::Action(
-                protocol::RequestAction { actions },
-            ));
-
-            info!("Sending action");
-            gameloop.send(req).await?;
-        }
+        gs.update(&response).await;
 
         idx += 1;
     }?;
