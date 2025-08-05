@@ -1,5 +1,8 @@
+mod throughput;
+
 use std::{io, sync::Arc, time::Duration};
 
+use chrono::Utc;
 use futures::{SinkExt, StreamExt};
 use log::info;
 use rsc2::{
@@ -8,7 +11,7 @@ use rsc2::{
     state_machine::Core,
 };
 use surrealdb::{
-    RecordId, Surreal,
+    RecordId, Surreal, Value,
     engine::remote::ws::{Client, Ws},
 };
 
@@ -16,11 +19,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Position {
-    pub id: RecordId,
+    id: RecordId,
     pub x: f32,
     pub y: f32,
     pub z: f32,
-    pub as_of: time::OffsetDateTime,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -38,6 +40,7 @@ pub struct Unit {
 }
 
 struct GameState {
+    start: Option<chrono::DateTime<Utc>>,
     store: Arc<Surreal<Client>>,
 }
 
@@ -52,10 +55,16 @@ impl GameState {
             .await
             .expect("Failed to use namespace and database");
         let store = Arc::new(store);
-        Self { store }
+        Self { store, start: None }
     }
 
     async fn update(&mut self, response: &protocol::Response) {
+        let now = Utc::now();
+        if self.start.is_none() {
+            // Initialize start time on first observation
+            self.start = Some(now);
+        }
+
         let protocol::Response {
             response: Some(protocol::response::Response::Observation(obs)),
             ..
@@ -84,50 +93,65 @@ impl GameState {
                     unit_type,
                 };
 
-                let position_id = RecordId::from(("position", surrealdb::Uuid::new_v4()));
+                let position_id = RecordId::from((
+                    "position",
+                    vec![
+                        Value::from(unit_id.clone()),
+                        <Value as std::str::FromStr>::from_str(&format!(
+                            "{}",
+                            surrealdb::Datetime::from(now)
+                        ))
+                        .expect("Failed to create position ID from datetime"),
+                    ],
+                ));
                 let position_data = Position {
                     id: position_id.clone(),
                     x: unit.pos.as_ref().and_then(|p| p.x).unwrap_or(0.0),
                     y: unit.pos.as_ref().and_then(|p| p.y).unwrap_or(0.0),
                     z: unit.pos.as_ref().and_then(|p| p.z).unwrap_or(0.0),
-                    as_of: time::OffsetDateTime::now_utc(),
                 };
 
                 let has_position = HasPosition {
-                    unit: unit_id.clone(),
-                    position: position_id.clone(),
+                    unit: unit_id,
+                    position: position_id,
                 };
                 (unit_data, (position_data, has_position))
             })
             .unzip();
 
-        let unitset = tokio::task::JoinSet::from_iter(unit_data.into_iter().map(|unit| {
-            let store = Arc::clone(&self.store);
-            tokio::task::spawn(async move {
-                let _: Option<Unit> = store.upsert(unit.id.clone()).content(unit).await.unwrap();
-            })
-        }));
-
-        let _: Vec<Position> = self
-            .store
-            .insert("position")
-            .content(position_data)
+        let response = self.store
+            .query("BEGIN")
+            .query("INSERT INTO unit $upsert_unit ON DUPLICATE KEY UPDATE last_seen = time::now();")
+            .query("INSERT INTO position $upsert_position ON DUPLICATE KEY UPDATE x = $x, y = $y, z = $z;")
+            .query("INSERT RELATION INTO has_position $upsert_has_position;")
+            .query("COMMIT")
+            .bind(("upsert_unit", unit_data))
+            .bind(("upsert_position", position_data))
+            .bind(("upsert_has_position", has_position))
             .await
-            .expect("Failed to upsert positions in SurrealDB");
+            .expect("Failed to define unit table in SurrealDB");
 
-        let _: Vec<HasPosition> = self
-            .store
-            .insert("has_position")
-            .relation(has_position)
-            .await
-            .expect("Failed to upsert HasPosition in SurrealDB");
-
-        unitset.join_all().await;
+        log::trace!(
+            "Observation insertion status: {:?}",
+            response.check().map(|_| "OK").unwrap_or("XX")
+        );
     }
 
     async fn on_step(&mut self) -> Vec<protocol::Action> {
         vec![]
     }
+}
+
+async fn request_observation(gameloop: &mut rsc2::InGameListener<'_, '_>) -> Result<(), io::Error> {
+    info!("Requesting observation");
+    let mut req = protocol::Request::default();
+    req.request = Some(protocol::request::Request::Observation(
+        protocol::RequestObservation {
+            disable_fog: Some(false),
+            game_loop: None,
+        },
+    ));
+    gameloop.send(req).await
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -137,20 +161,15 @@ async fn main() -> io::Result<()> {
     let mut gs = GameState::new().await;
     log::info!("Game state connection initialized");
 
-    gs.store
-        .query("DEFINE TABLE unit SCHEMALESS;")
+    let response = gs
+        .store
+        .query("DEFINE TABLE OVERWRITE unit SCHEMALESS;")
+        .query("DEFINE TABLE OVERWRITE position SCHEMALESS;")
+        .query("DEFINE TABLE OVERWRITE has_position TYPE RELATION IN unit OUT position SCHEMALESS")
         .await
         .unwrap();
 
-    gs.store
-        .query("DEFINE TABLE position SCHEMALESS;")
-        .await
-        .unwrap();
-
-    gs.store
-        .query("DEFINE TABLE has_position TYPE RELATION IN unit OUT position SCHEMALESS")
-        .await
-        .unwrap();
+    response.check().expect("Failed to define SurrealDB tables");
 
     log::info!("SurrealDB tables defined");
 
@@ -171,35 +190,43 @@ async fn main() -> io::Result<()> {
     let mut gameloop = state.stream(&mut connection);
     let mut idx = 0;
 
-    let _state = loop {
-        log::trace!("Game loop iteration {idx}");
+    let mut throughput_recorder = throughput::RollingRecorder::<16>::new();
 
-        if idx == 0 {
-            // wait for game to start
-            tokio::time::sleep(Duration::from_secs(3)).await;
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+    // wait for game to start
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
-        info!("Requesting observation");
-        let mut req = protocol::Request::default();
-        req.request = Some(protocol::request::Request::Observation(
-            protocol::RequestObservation {
-                disable_fog: Some(false),
-                game_loop: None, //Some(idx),
-            },
-        ));
-
-        gameloop.send(req).await?;
-        let response = match gameloop.next().await {
-            Some(Ok(result)) => result,
-            Some(Err(error)) => break Err(error),
-            None => break Ok(gameloop.into_ended()),
+    // Start the game loop
+    request_observation(&mut gameloop).await?;
+    while let Some(response) = gameloop.next().await {
+        let loop_start = std::time::Instant::now();
+        let Ok(response) = response else {
+            let e = response.unwrap_err();
+            log::error!("Error in game loop: {}", e);
+            break;
         };
 
+        // Process the response
         gs.update(&response).await;
 
+        // request next observation
+        request_observation(&mut gameloop).await?;
+
+        // record throughput
+        throughput_recorder.record(
+            std::time::Instant::now()
+                .duration_since(loop_start)
+                .as_millis() as f64,
+        );
+        let tp_ms = throughput_recorder.get_average();
+        log::trace!(
+            "Game loop iteration {idx}; throughput: {}ms/it | {} it/s",
+            tp_ms,
+            1_000.0 / tp_ms
+        );
         idx += 1;
-    }?;
+    }
+    let _ended = gameloop.into_ended();
+
     log::info!("Game loop finished gracefully after {} iterations", idx);
 
     Ok(())

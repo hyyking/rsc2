@@ -19,6 +19,7 @@ pub mod state_machine;
 use crate::definitions::ToMapRef;
 pub use crate::state_machine::Core;
 pub use crate::state_machine::InGame;
+pub use ingame::InGameListener;
 
 pub type Connection = Framed<TcpStream, S2Codec>;
 
