@@ -9,11 +9,10 @@ build = "build.rs"
 codec = ["tokio-util", "websocket-codec"]
 
 [dependencies]
-prost = { version = "0.14" }
-bytes = { version = "1" }
-
-websocket-codec = { version = "0.5", optional = true }
-tokio-util = { version = "0.7", features = ["codec"], optional = true }
+prost = { workspace = true }
+bytes = { workspace = true }
+websocket-codec = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true, features = ["codec"] }
 
 [build-dependencies]
-prost-build = { version = "0.14" }
+prost-build = { workspace = true }
