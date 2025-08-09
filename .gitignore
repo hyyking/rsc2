@@ -5,3 +5,5 @@ Cargo.lock
 **/*.rs.bk
 StarCraftII
 run.sh
+protoc*
+.cargo

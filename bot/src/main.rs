@@ -1,8 +1,8 @@
+mod store;
 mod throughput;
 
 use std::{io, sync::Arc, time::Duration};
 
-use chrono::Utc;
 use futures::{SinkExt, StreamExt};
 use log::info;
 use rsc2::{
@@ -11,60 +11,24 @@ use rsc2::{
     state_machine::Core,
 };
 use surrealdb::{
-    RecordId, Surreal, Value,
+    Surreal,
     engine::remote::ws::{Client, Ws},
 };
 
-use serde::{Deserialize, Serialize};
+use crate::store::World;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Position {
-    id: RecordId,
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
+struct Bot {
+    world: World,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct HasPosition {
-    #[serde(rename = "in")]
-    unit: RecordId,
-    #[serde(rename = "out")]
-    position: RecordId,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Unit {
-    pub id: RecordId,
-    pub unit_type: u32,
-}
-
-struct GameState {
-    start: Option<chrono::DateTime<Utc>>,
-    store: Arc<Surreal<Client>>,
-}
-
-impl GameState {
-    async fn new() -> Self {
-        let store = Surreal::new::<Ws>("localhost:8001")
-            .await
-            .expect("Failed to connect to SurrealDB");
-        store
-            .use_ns("sc2bot")
-            .use_db("test")
-            .await
-            .expect("Failed to use namespace and database");
-        let store = Arc::new(store);
-        Self { store, start: None }
+impl Bot {
+    async fn new(db: Arc<Surreal<Client>>) -> Self {
+        Self {
+            world: World::new(db),
+        }
     }
 
-    async fn update(&mut self, response: &protocol::Response) {
-        let now = Utc::now();
-        if self.start.is_none() {
-            // Initialize start time on first observation
-            self.start = Some(now);
-        }
-
+    async fn update(&mut self, response: protocol::Response) {
         let protocol::Response {
             response: Some(protocol::response::Response::Observation(obs)),
             ..
@@ -74,71 +38,12 @@ impl GameState {
             return;
         };
 
-        let protocol::ObservationRaw { units, .. } = obs
-            .observation
-            .as_ref()
-            .and_then(|obs| obs.raw_data.as_ref())
-            .unwrap();
-
-        let (unit_data, (position_data, has_position)): (
-            Vec<Unit>,
-            (Vec<Position>, Vec<HasPosition>),
-        ) = units
-            .into_iter()
-            .map(|unit| {
-                let unit_id = RecordId::from(("unit", unit.tag() as i64));
-                let unit_type = unit.unit_type();
-                let unit_data = Unit {
-                    id: unit_id.clone(),
-                    unit_type,
-                };
-
-                let position_id = RecordId::from((
-                    "position",
-                    vec![
-                        Value::from(unit_id.clone()),
-                        <Value as std::str::FromStr>::from_str(&format!(
-                            "{}",
-                            surrealdb::Datetime::from(now)
-                        ))
-                        .expect("Failed to create position ID from datetime"),
-                    ],
-                ));
-                let position_data = Position {
-                    id: position_id.clone(),
-                    x: unit.pos.as_ref().and_then(|p| p.x).unwrap_or(0.0),
-                    y: unit.pos.as_ref().and_then(|p| p.y).unwrap_or(0.0),
-                    z: unit.pos.as_ref().and_then(|p| p.z).unwrap_or(0.0),
-                };
-
-                let has_position = HasPosition {
-                    unit: unit_id,
-                    position: position_id,
-                };
-                (unit_data, (position_data, has_position))
-            })
-            .unzip();
-
-        let response = self.store
-            .query("BEGIN")
-            .query("INSERT INTO unit $upsert_unit ON DUPLICATE KEY UPDATE last_seen = time::now();")
-            .query("INSERT INTO position $upsert_position ON DUPLICATE KEY UPDATE x = $x, y = $y, z = $z;")
-            .query("INSERT RELATION INTO has_position $upsert_has_position;")
-            .query("COMMIT")
-            .bind(("upsert_unit", unit_data))
-            .bind(("upsert_position", position_data))
-            .bind(("upsert_has_position", has_position))
-            .await
-            .expect("Failed to define unit table in SurrealDB");
-
-        log::trace!(
-            "Observation insertion status: {:?}",
-            response.check().map(|_| "OK").unwrap_or("XX")
-        );
-    }
-
-    async fn on_step(&mut self) -> Vec<protocol::Action> {
-        vec![]
+        if let Some(observation) = obs.observation.map(|obs| obs.raw_data).flatten() {
+            self.world
+                .register_observation_raw(observation)
+                .await
+                .unwrap();
+        }
     }
 }
 
@@ -155,21 +60,22 @@ async fn request_observation(gameloop: &mut rsc2::InGameListener<'_, '_>) -> Res
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> io::Result<()> {
+async fn main() -> anyhow::Result<()> {
     pretty_env_logger::init_timed();
 
-    let mut gs = GameState::new().await;
-    log::info!("Game state connection initialized");
+    let store = Arc::new(Surreal::new::<Ws>("localhost:8001").await?);
 
-    let response = gs
-        .store
+    store
         .query("DEFINE TABLE OVERWRITE unit SCHEMALESS;")
         .query("DEFINE TABLE OVERWRITE position SCHEMALESS;")
         .query("DEFINE TABLE OVERWRITE has_position TYPE RELATION IN unit OUT position SCHEMALESS")
-        .await
-        .unwrap();
+        .await?
+        .check()?;
 
-    response.check().expect("Failed to define SurrealDB tables");
+    store.use_ns("sc2bot").use_db("test").await?;
+
+    let mut gs = Bot::new(store).await;
+    log::info!("Game state connection initialized");
 
     log::info!("SurrealDB tables defined");
 
@@ -206,7 +112,7 @@ async fn main() -> io::Result<()> {
         };
 
         // Process the response
-        gs.update(&response).await;
+        gs.update(response).await;
 
         // request next observation
         request_observation(&mut gameloop).await?;
