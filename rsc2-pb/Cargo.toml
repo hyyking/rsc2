@@ -2,7 +2,7 @@
 name = "rsc2_pb"
 version = "1.0.0"
 authors = ["hyyking <leoduret@outlook.com>"]
-edition = "2018"
+edition = "2024"
 build = "build.rs"
 
 [features]
@@ -16,4 +16,4 @@ websocket-codec = { version = "0.5", optional = true }
 tokio-util = { version = "0.7", features = ["codec"], optional = true }
 
 [build-dependencies]
-prost-build = { version = "0.7" }
+prost-build = { version = "0.14" }

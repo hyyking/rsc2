@@ -16,10 +16,7 @@
 /// Generated protobuf protocol
 #[allow(missing_docs)] // TODO: add custom documention for protocol
 pub mod protocol {
-    include!(concat!(
-        env!("OUT_DIR", "Couldn't find the generated rust-protobuf code"),
-        "/sc2api_protocol.rs"
-    ));
+    include!(concat!(env!("OUT_DIR"), "/sc2api_protocol.rs"));
 }
 
 #[cfg(feature = "codec")]
