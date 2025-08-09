@@ -1,8 +1,10 @@
+mod queries;
 mod store;
 mod throughput;
 
 use std::{io, sync::Arc, time::Duration};
 
+use anyhow::Context;
 use futures::{SinkExt, StreamExt};
 use log::info;
 use rsc2::{
@@ -65,19 +67,21 @@ async fn main() -> anyhow::Result<()> {
 
     let store = Arc::new(Surreal::new::<Ws>("localhost:8001").await?);
 
+    store.use_ns("sc2bot").use_db("test").await?;
+    log::info!("Game state connection initialized");
+
     store
-        .query("DEFINE TABLE OVERWRITE unit SCHEMALESS;")
-        .query("DEFINE TABLE OVERWRITE position SCHEMALESS;")
-        .query("DEFINE TABLE OVERWRITE has_position TYPE RELATION IN unit OUT position SCHEMALESS")
+        .query(
+            queries::get("create_database")
+                .await
+                .with_context(|| "Expected create_database query to exist")?,
+        )
         .await?
         .check()?;
 
-    store.use_ns("sc2bot").use_db("test").await?;
+    log::info!("SurrealDB tables defined");
 
     let mut gs = Bot::new(store).await;
-    log::info!("Game state connection initialized");
-
-    log::info!("SurrealDB tables defined");
 
     let mut sm = Core::init();
 

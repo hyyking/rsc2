@@ -1,11 +1,14 @@
 mod model;
 use std::sync::Arc;
 
+use anyhow::Context;
 use chrono::{DateTime, Utc};
 pub use model::{HasPosition, Position, Unit};
 
 use rsc2::protocol;
 use surrealdb::{RecordId, Surreal, Value, engine::remote::ws::Client};
+
+use crate::queries;
 
 pub struct World {
     store: Arc<Surreal<Client>>,
@@ -70,12 +73,13 @@ impl World {
             })
             .unzip();
 
-        let response = self.store
-            .query("BEGIN")
-            .query("INSERT INTO unit $upsert_unit ON DUPLICATE KEY UPDATE last_seen = time::now();")
-            .query("INSERT INTO position $upsert_position ON DUPLICATE KEY UPDATE x = $x, y = $y, z = $z;")
-            .query("INSERT RELATION INTO has_position $upsert_has_position;")
-            .query("COMMIT")
+        let response = self
+            .store
+            .query(
+                queries::get("register_observation")
+                    .await
+                    .with_context(|| "Expect a register_observation to be present")?,
+            )
             .bind(("upsert_unit", unit_data))
             .bind(("upsert_position", position_data))
             .bind(("upsert_has_position", has_position))
