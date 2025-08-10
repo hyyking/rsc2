@@ -30,22 +30,20 @@ impl Bot {
         }
     }
 
-    async fn update(&mut self, response: protocol::Response) {
+    async fn update(&self, response: protocol::Response) -> anyhow::Result<()> {
         let protocol::Response {
             response: Some(protocol::response::Response::Observation(obs)),
             ..
         } = response
         else {
             log::trace!("Received non-observation response");
-            return;
+            return Ok(());
         };
 
         if let Some(observation) = obs.observation.map(|obs| obs.raw_data).flatten() {
-            self.world
-                .register_observation_raw(observation)
-                .await
-                .unwrap();
+            self.world.register_observation_raw(observation).await?;
         }
+        Ok(())
     }
 }
 
@@ -61,15 +59,13 @@ async fn request_observation(gameloop: &mut rsc2::InGameListener<'_, '_>) -> Res
     gameloop.send(req).await
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> anyhow::Result<()> {
-    pretty_env_logger::init_timed();
-
+async fn init_bot() -> anyhow::Result<Bot> {
+    // Initialize the SurrealDB connection
     let store = Arc::new(Surreal::new::<Ws>("localhost:8001").await?);
-
     store.use_ns("sc2bot").use_db("test").await?;
     log::info!("Game state connection initialized");
 
+    // Ensure the database is created and tables are defined
     store
         .query(
             queries::get("create_database")
@@ -81,7 +77,14 @@ async fn main() -> anyhow::Result<()> {
 
     log::info!("SurrealDB tables defined");
 
-    let mut gs = Bot::new(store).await;
+    Ok(Bot::new(store).await)
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> anyhow::Result<()> {
+    pretty_env_logger::init_timed();
+
+    let bot = Arc::new(init_bot().await?);
 
     let mut sm = Core::init();
 
@@ -115,8 +118,9 @@ async fn main() -> anyhow::Result<()> {
             break;
         };
 
-        // Process the response
-        gs.update(response).await;
+        if let Err(e) = bot.update(response).await {
+            log::error!("Error updating bot: {}", e);
+        }
 
         // request next observation
         request_observation(&mut gameloop).await?;
@@ -129,7 +133,7 @@ async fn main() -> anyhow::Result<()> {
         );
         let tp_ms = throughput_recorder.get_average();
         log::trace!(
-            "Game loop iteration {idx}; throughput: {}ms/it | {} it/s",
+            "Game loop iteration {idx}; throughput: {:.4}ms/it | {:.4}it/s",
             tp_ms,
             1_000.0 / tp_ms
         );

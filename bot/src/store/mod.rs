@@ -12,7 +12,6 @@ use crate::queries;
 
 pub struct World {
     store: Arc<Surreal<Client>>,
-    start: Option<DateTime<Utc>>,
 }
 
 trait ValueExt {
@@ -26,18 +25,14 @@ impl ValueExt for Value {}
 
 impl World {
     pub fn new(store: Arc<Surreal<Client>>) -> Self {
-        Self { store, start: None }
+        Self { store }
     }
 
     pub async fn register_observation_raw(
-        &mut self,
+        &self,
         observation: protocol::ObservationRaw,
     ) -> anyhow::Result<()> {
         let now = Utc::now();
-        if self.start.is_none() {
-            // Initialize start time on first observation
-            self.start = Some(now);
-        }
 
         let protocol::ObservationRaw { units, .. } = observation;
 
@@ -85,9 +80,14 @@ impl World {
             .bind(("upsert_has_position", has_position))
             .await?;
 
+        let check = response.check();
+        if let Err(e) = check.as_ref() {
+            log::error!("Error inserting observation: {}", e);
+        }
+
         log::trace!(
             "Observation insertion status: {:?}",
-            response.check().map(|_| "OK").unwrap_or("XX")
+            check.map(|_| "OK").unwrap_or("XX")
         );
         Ok(())
     }

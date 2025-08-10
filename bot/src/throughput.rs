@@ -1,3 +1,5 @@
+/// A simple rolling recorder that keeps track of the last `SIZE` values
+/// and provides an average of those values.
 pub struct RollingRecorder<const SIZE: usize> {
     buffer: [f64; SIZE],
     index: usize,

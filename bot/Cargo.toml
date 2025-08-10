@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rsc2 = { workspace = true, version = "0.1" }
+rsc2 = { workspace = true }
 futures = { workspace = true }
 tokio-util = { workspace = true }
 tokio = { workspace = true, features = ["net", "macros", "rt", "time"] }
